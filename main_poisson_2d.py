@@ -36,7 +36,7 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
 
     # --- Géométrie des crayons et assemblages ---
     m_val = 3                # Nombre de crayons combustibles sur le côté d'un assemblage NE PEUT PAS ETRE 1 SI COOLING
-    n_val = 4                # Nombre total d'assemblages dans la cuve (choix restreint à 1, 4 ou 9 pour la symétrie)
+    n_val = 1                # Nombre total d'assemblages dans la cuve (choix restreint à 1, 4 ou 9 pour la symétrie)
     pitch_val = 18.7e-3      # Pas du réseau : distance entre le centre de deux crayons voisins (en mètres)
     R_rod_val = 6.15e-3      # Rayon extérieur physique d'un crayon combustible (en mètres)
     
@@ -46,7 +46,7 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
 
     R_cooling_val = 2.0e-3       # rayon des barres de refroidissement [m]
     
-    add_cooling_rods_val = True  # True pour activer les barres, False pour les désactiver
+    add_cooling_rods_val = False  # True pour activer les barres, False pour les désactiver
 
     # --- Paramètres du maillage (Gmsh) ---
     smin_val = 1.5e-3        # Taille minimale des éléments (triangles) du maillage, contrôle la précision près des bords
@@ -146,7 +146,7 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
     # Paramètres temporels
     theta  = 1.0          # Euler implicite (stable inconditionnellement)
     dt     = 1.0          # pas de temps [s]
-    t_end  = 100.0        # durée totale [s]
+    t_end  = 100       # durée totale [s]
 
     # Condition initiale : eau uniforme à T0
     U0 = np.full(num_dofs, T0_K)
@@ -185,24 +185,27 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
     # ETAPE 6 : FLUX DES BARRES DE REFROIDISSEMENT
     # ============================================================
     
-    cooling_data = get_boundary_segments(physical_tag=30, order=order)
-    print(f"[E6] {len(cooling_data[1])} segments sur les barres de refroidissement")
-    
-    # Noeuds des barres pour calculer T_avg local
-    cooling_node_tags = np.unique(cooling_data[2])  # adapter selon la structure de cooling_data
-    cooling_dofs = border_dofs_from_tags(cooling_node_tags, tag_to_dof)
-    
-    T_ext    = 500.0   # température imposée aux barres [K]
-    H_bar    = 0.5     # hauteur effective des barres [m]
-    t_insert = 20.0    # instant d'insertion [s]
-    
-    def cooling_rhs(t, U):
-        return cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs,
-                              T_ext, H_bar, t_insert, lut, tag_to_dof)
+    if add_cooling_rods_val:
+        cooling_data = get_boundary_segments(physical_tag=30, order=order)
+        print(f"[E6] {len(cooling_data[1])} segments sur les barres de refroidissement")
+        
+        cooling_node_tags = np.unique(cooling_data[2])
+        cooling_dofs = border_dofs_from_tags(cooling_node_tags, tag_to_dof)
+        
+        T_ext    = 500.0
+        H_bar    = 0.5
+        t_insert = 20.0
+        
+        def cooling_rhs(t, U):
+            return cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs,
+                                T_ext, H_bar, t_insert, lut, tag_to_dof)
 
-    def combined_rhs(t, U):
-        return rod_rhs(t, U) + cooling_rhs(t, U)
-    
+        def combined_rhs(t, U):
+            return rod_rhs(t, U) + cooling_rhs(t, U)
+    else:
+        cooling_dofs = np.array([], dtype=int)
+        def combined_rhs(t, U):
+            return rod_rhs(t, U)
     
     frames = []
 
@@ -270,36 +273,6 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
     plt.show(block=True)
     return
 
-    """
-    
-    border_tags = np.concatenate(bnds_tags)
-
-    # to apply dirichlet condition with the analytical expr, we need to evaluate nodes at right coords -> use mapping
-    num_dofs = len(F) 
-    dof_coords = np.zeros((num_dofs, 3))
-    all_coords = nodeCoords.reshape(-1, 3)
-    for i, tag in enumerate(nodeTags):
-        idx = tag_to_dof[int(tag)]
-        if idx != -1:
-            dof_coords[idx] = all_coords[i]
-
-    # get the indices of the boundary nodes mapped to the system we solve
-    border_dofs = border_dofs_from_tags(border_tags, tag_to_dof)
-    # set the dirichlet values : here we evaluate the analytical function for the example
-    dir_vals = [u_exact(dof_coords[d]) for d in border_dofs]
-
-    # Solve 
-    U = solve_dirichlet(K, F, border_dofs, dir_vals)
-
-    L2, H1_semi, H1 = compute_L2_H1_errors(elemType, elemTags, elemNodeTags, U, xi, w, N, gN, jac, det, coords, u_exact, grad_exact=grad_exact, tag_to_dof=tag_to_dof)
-    print("Errors: L2 = {:.6e}, H1 semi = {:.6e}, H1 = {:.6e}".format(L2, H1_semi, H1))
-    gmsh_finalize()
-
-    plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof, show_mesh=False, ax=None)
-    plt.show()
-    
-    return
-"""
 
 
 if __name__ == "__main__":

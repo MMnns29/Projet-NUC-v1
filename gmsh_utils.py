@@ -652,6 +652,26 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3,
                     cool_circles.append(c)
                     cool_loops.append(lp)
                     cooling_positions.append((bx, by))
+    #bloc suivant à commenter ou pas si on veut les rods extérieurs
+    # ---- cooling rods extérieurs : milieu de chaque paire de crayons sur les bords
+    # même principe que les intérieurs mais une demi-maille au-delà du bord de l'assemblage
+
+        outer_offset = m / 2.0 * pitch
+        for (cx, cy) in centers:
+            for k in range(m - 1):
+                mid = (k - (m - 2) / 2.0) * pitch
+                for bx, by in [
+                    (cx - outer_offset, cy + mid),
+                    (cx + outer_offset, cy + mid),
+                    (cx + mid, cy - outer_offset),
+                    (cx + mid, cy + outer_offset),
+                ]:
+                    c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
+                    lp = gmsh.model.occ.addCurveLoop([c])
+                    cool_circles.append(c)
+                    cool_loops.append(lp)
+                    cooling_positions.append((bx, by))
+                    
 
     # --- Ajout des trous de refroidissement dans la surface d'eau ---
     surface = gmsh.model.occ.addPlaneSurface([outer_loop] + rod_loops + cool_loops)
@@ -692,13 +712,15 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3,
     elemTags, elemNodeTags  = gmsh.model.mesh.getElementsByType(elemType)
 
     # --- Ajout du tag 'cooling_surfaces' pour que le main() puisse le récupérer ---
-    bnds = [("outer_boundary", 1), ("rod_surfaces", 1), ("cooling_surfaces", 1)]
+    bnds = [("outer_boundary", 1), ("rod_surfaces", 1)]
+    if cool_circles:
+        bnds.append(("cooling_surfaces", 1))
+
     bnds_tags = []
     for name, dim in bnds:
         tag = next(g[1] for g in gmsh.model.getPhysicalGroups(dim)
-                   if gmsh.model.getPhysicalName(dim, g[1]) == name)
+                if gmsh.model.getPhysicalName(dim, g[1]) == name)
         bnds_tags.append(gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)[0])
-
     return elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions
 ########################################################
 ########################################################
