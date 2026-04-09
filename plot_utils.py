@@ -8,8 +8,7 @@ from gmsh_utils import prepare_quadrature_and_basis, get_jacobians
 
 
 # Plot the generated mesh. Highlight the physical groups created. 
-def plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, tag_to_index=None,save_path = None):
-
+def plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, tag_to_index=None, save_path=None, cooling_rods=None, R_cooling=8.0e-3):
     coords = nodeCoords.reshape(-1, 3)
     x = coords[:, 0]
     y = coords[:, 1]
@@ -44,6 +43,14 @@ def plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, b
         ax.scatter(x[indices], y[indices], label=name, s=0.1, zorder=3, 
                    marker="o", facecolor="None", edgecolor=colors[i % len(colors)])#changer le s pour la taille des bords
 
+
+# Affichage des ronds noirs basés strictement sur la liste fournie par mesh5
+    if cooling_rods is not None:
+        for (cx, cy) in cooling_rods:
+            ax.add_patch(plt.Circle((cx, cy), R_cooling, color='black', zorder=4))
+    #---------------------------------------------------------------------------------
+    
+    
     ax.set_aspect('equal')
     ax.legend(frameon=True, framealpha=1, ncols=2, loc="lower center", bbox_to_anchor=(0.5, 1.02))
     plt.axis(False)
@@ -98,8 +105,12 @@ def plot_fe_solution_high_order(
     return ax
 
 
-def plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof, show_mesh=False, ax=None, label=None):
-
+def plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof,
+                         show_mesh=False, ax=None, label=None,
+                         gap_outer=75e-3, R_cooling=2.0e-3,
+                         cooling_rods=None, add_colorbar=True,
+                         vmin=None, vmax=None): 
+    #pas oublier de changer R cooling de la pastille si on change celle des cooling barres physiques aussi 
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
     
@@ -129,14 +140,25 @@ def plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof, show_
     triangles = tag_to_dof[conn_reshaped[:, :3].astype(int)]
     # 4. Plotting
     U = np.array(U).flatten()
-    contour = ax.tricontourf(x, y, triangles, U, levels=100, cmap='viridis')
     
+
+    levels = np.linspace(vmin, vmax, 100)
+    contour = ax.tricontourf(x, y, triangles, U, levels=levels, cmap='coolwarm', vmin=vmin, vmax=vmax)
     if show_mesh:
         ax.triplot(x, y, triangles, color='white', linewidth=0.2, alpha=0.3)
+        
+        
+    # Affichage des ronds noirs basés strictement sur la liste fournie par mesh5
+    if cooling_rods is not None:
+        for (cx, cy) in cooling_rods:
+            ax.add_patch(plt.Circle((cx, cy), R_cooling, color='black', zorder=4))
+    #---------------------------------------------------------------------------------
+        
 
     ax.set_aspect('equal')
-    plt.colorbar(contour, ax=ax, label=label)
-    
+    if add_colorbar:  # <-- conditionnel
+        ax.get_figure().colorbar(contour, ax=ax, label=label)  # <-- fig correcte
+        
     return contour
 
 

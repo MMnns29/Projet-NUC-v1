@@ -249,8 +249,6 @@ def mesh1(L=1, H=1, order=1, smin=0.01, smax=0.1, dmin=0.1, dmax=0.3):
 
 
 
-
-
 def mesh2(L=1, H=1, order=1, smin=0.01, smax=0.1, dmin=0.1, dmax=0.3):
 
     # 1. Geometry Construction using OCC Primitives
@@ -306,7 +304,6 @@ def mesh2(L=1, H=1, order=1, smin=0.01, smax=0.1, dmin=0.1, dmax=0.3):
 
 
 
-
 def meshSol(L=2, H=1, order=1, smin=0.01, smax=0.1, dmin=0.1, dmax=0.3):
 
     # TODO :-)
@@ -320,7 +317,8 @@ def meshSol(L=2, H=1, order=1, smin=0.01, smax=0.1, dmin=0.1, dmax=0.3):
 #####################################################################
 #code du domaine pour les crayons nucléaires
 #n le nombre d'assemblages (1, 4 ou 9) et m le nombre de crayons par coté par assemblage
-def mesh3(m=7, n=4, order=1,pitch=18.7e-3, R_rod=6.15e-3,gap_assembly=12e-3, gap_outer=75e-3,
+
+def mesh3(m=3, n=4, order=1,pitch=18.7e-3, R_rod=6.15e-3,gap_assembly=12e-3, gap_outer=75e-3,
           R_core=None,smin=1.5e-3): #distance entre le bord et le coin extérieur
 
     import sys, math
@@ -435,7 +433,273 @@ def mesh3(m=7, n=4, order=1,pitch=18.7e-3, R_rod=6.15e-3,gap_assembly=12e-3, gap
 
     return elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags
 
-#code qui était déjà là
+
+
+
+
+
+
+def mesh4(H=0.02, m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, gap_assembly=12e-3, gap_outer=75e-3, R_core=None, smin=1.5e-3):
+    import sys, math
+    import gmsh
+    import numpy as np
+
+    assert n in (1, 4, 9), "n doit être 1, 4 ou 9"
+
+    # --- Centres des assemblages ---
+    L_asm = m * pitch
+    L_cluster = int(math.sqrt(n)) * L_asm + (int(math.sqrt(n)) - 1) * gap_assembly
+    
+    if n == 1:
+        centers = [(0.0, 0.0)]
+    elif n == 4:
+        s = L_asm / 2.0 + gap_assembly / 2.0
+        centers = [(sx*s, sy*s) for sx in (-1., 1.) for sy in (-1., 1.)]
+    else:  # n == 9
+        d = L_asm + gap_assembly
+        centers = [(i*d, j*d) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+
+    # --- Positions de tous les crayons ---
+    offsets = [(k - (m-1)/2.0)*pitch for k in range(m)]
+    all_rods = [(cx+dx, cy+dy) for (cx, cy) in centers for dx in offsets for dy in offsets]
+
+    # --- Rayon du disque / cuve ---
+    R_disk = max(math.hypot(cx + sx*L_asm/2., cy + sy*L_asm/2.)
+                 for (cx, cy) in centers for sx in (-1., 1.) for sy in (-1., 1.)) + gap_outer
+    smax = R_disk / 6
+
+    # =========================================================
+    # EXTRACTION DE LA COUPE SUR TOUT LE DIAMÈTRE
+    # =========================================================
+    # Astuce : Trouver la rangée de crayons la plus proche de y=0 (pour éviter les gaps vides)
+    y_slice = min(all_rods, key=lambda p: abs(p[1]))[1]
+    
+    # On garde tous les crayons (de gauche à droite) situés sur cette ligne Y
+    radial_rods = [rx for (rx, ry) in all_rods if abs(ry - y_slice) < 1e-5]
+    radial_rods.sort()
+
+    R_core_eff = min(R_core, R_disk - R_rod) if R_core is not None else (R_disk - R_rod)
+    # On filtre pour ne garder que ceux dans le cœur
+    radial_rods = [rx for rx in radial_rods if abs(rx) <= R_core_eff]
+
+    # --- Géométrie OCC ---
+    # Le domaine principal s'étend de -R_disk à +R_disk
+    domain_rect = gmsh.model.occ.addRectangle(-R_disk, 0, 0, 2 * R_disk, H)
+    
+    rod_rects = []
+    for rx in radial_rods:
+        # Chaque crayon est une bande de largeur 2*R_rod
+        rect = gmsh.model.occ.addRectangle(rx - R_rod, 0, 0, 2 * R_rod, H)
+        rod_rects.append(rect)
+            
+    # Découpage booléen : Eau = Rectangle global MOINS les crayons
+    if rod_rects:
+        water_domain, _ = gmsh.model.occ.cut([(2, domain_rect)], [(2, r) for r in rod_rects], removeObject=True, removeTool=True)
+        surface_tags = [tag for (dim, tag) in water_domain]
+    else:
+        surface_tags = [domain_rect]
+
+    gmsh.model.occ.synchronize()
+
+    # --- Groupes physiques ---
+    gmsh.model.addPhysicalGroup(2, surface_tags, tag=1, name="water")
+    
+    bnd_entities = gmsh.model.getBoundary([(2, s) for s in surface_tags], oriented=False)
+    outer_lines = []
+    rod_lines = []
+    
+    for dim, tag in bnd_entities:
+        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(1, tag)
+        
+        # Bords extérieurs (gauche et droite)
+        if (abs(xmin - (-R_disk)) < 1e-5 and abs(xmax - (-R_disk)) < 1e-5) or \
+           (abs(xmin - R_disk) < 1e-5 and abs(xmax - R_disk) < 1e-5):
+            outer_lines.append(tag)
+        # Parois des crayons (lignes verticales internes)
+        elif abs(xmin - xmax) < 1e-5 and xmin > -R_disk + 1e-5 and xmin < R_disk - 1e-5:
+            rod_lines.append(tag)
+            
+    gmsh.model.addPhysicalGroup(1, outer_lines, tag=10, name="outer_boundary")
+    if rod_lines:
+        gmsh.model.addPhysicalGroup(1, rod_lines, tag=20, name="rod_surfaces")
+
+    # --- Champ de taille ---
+    dist_field = gmsh.model.mesh.field.add("Distance")
+    gmsh.model.mesh.field.setNumbers(dist_field, "CurvesList", rod_lines)
+    threshold_field = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(threshold_field, "InField",  dist_field)
+    gmsh.model.mesh.field.setNumber(threshold_field, "SizeMin",  smin)
+    gmsh.model.mesh.field.setNumber(threshold_field, "SizeMax",  smax)
+    gmsh.model.mesh.field.setNumber(threshold_field, "DistMin",  0.0)
+    
+    # Adoucissement proportionnel à l'espace d'eau pour que ce soit beau jusqu'au bord
+    gmsh.model.mesh.field.setNumber(threshold_field, "DistMax",  gap_outer)
+    gmsh.model.mesh.field.setAsBackgroundMesh(threshold_field)
+
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+
+    # --- Génération ---
+    gmsh.model.mesh.generate(2)
+    gmsh.model.mesh.setOrder(order)
+
+    # --- Extraction ---
+    elemType = gmsh.model.mesh.getElementType("triangle", order)
+    nodeTags, nodeCoords, _ = gmsh.model.mesh.getNodes()
+    elemTags, elemNodeTags  = gmsh.model.mesh.getElementsByType(elemType)
+
+    bnds = [("outer_boundary", 1), ("rod_surfaces", 1)]
+    bnds_tags = []
+    for name, dim in bnds:
+        try:
+            tag = next(g[1] for g in gmsh.model.getPhysicalGroups(dim)
+                       if gmsh.model.getPhysicalName(dim, g[1]) == name)
+            bnds_tags.append(gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)[0])
+        except StopIteration:
+            bnds_tags.append(np.array([], dtype=int))
+
+    return elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags
+
+
+
+
+def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3,
+          gap_assembly=12e-3, gap_outer=75e-3, R_core=None, smin=1.5e-3,
+          add_cooling_rods=True):
+
+    import sys, math
+    assert n in (1, 4, 9), "n doit être 1, 4 ou 9"
+
+    # --- Vérifications géométriques ---
+    gap_rod = pitch - 2.0 * R_rod
+    if gap_rod <= 0.0:
+        raise ValueError(
+            "Les crayons se chevauchent : pitch=%.2f mm, 2*R_rod=%.2f mm"
+            % (pitch*1e3, 2*R_rod*1e3))
+    if gap_rod < 3 * smin:
+        print("AVERTISSEMENT : gap inter-crayons = %.2f mm (~%.1f elements)."
+              " Recommande smin <= %.2f mm."
+              % (gap_rod*1e3, gap_rod/smin, gap_rod/3*1e3), file=sys.stderr)
+    if gap_assembly <= 0.0:
+        raise ValueError("gap_assembly doit etre > 0")
+
+    # --- Centres des assemblages ---
+    L_asm = m * pitch
+    
+    L_cluster = int(math.sqrt(n)) * L_asm + (int(math.sqrt(n)) - 1) * gap_assembly
+    gap_outer = L_cluster / 3
+    
+    if n == 1:
+        centers = [(0.0, 0.0)]
+    elif n == 4:
+        s = L_asm / 2.0 + gap_assembly / 2.0
+        centers = [(sx*s, sy*s) for sx in (-1., 1.) for sy in (-1., 1.)]
+    else:  # n == 9
+        d = L_asm + gap_assembly
+        centers = [(i*d, j*d) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+
+    # --- Positions de tous les crayons ---
+    offsets = [(k - (m-1)/2.0)*pitch for k in range(m)]
+    all_rods = [(cx+dx, cy+dy)
+                for (cx, cy) in centers
+                for dx in offsets for dy in offsets]
+
+    # --- Rayon du disque ---
+    R_disk = max(math.hypot(cx + sx*L_asm/2., cy + sy*L_asm/2.)
+                 for (cx, cy) in centers
+                 for sx in (-1., 1.) for sy in (-1., 1.)) + gap_outer
+    
+    smax = R_disk / 6   # remplace le paramètre smax passé en argument
+    
+    # --- Positions des 4 barres de refroidissement ---
+    # On les place dans l'eau périphérique pour éviter les chevauchements
+    r_cool = R_disk - gap_outer / 2.0
+    
+    # --- Filtrage crayons hors R_core ---
+    R_core_eff = min(R_core, R_disk - R_rod) if R_core is not None else (R_disk - R_rod)
+    kept_rods  = [(rx, ry) for (rx, ry) in all_rods
+                  if math.hypot(rx, ry) <= R_core_eff]
+    n_removed  = len(all_rods) - len(kept_rods)
+    if n_removed:
+        print("Info : %d crayons supprimes (R_core=%.1f mm)"
+              % (n_removed, R_core_eff*1e3))
+
+    # --- Géométrie ---
+    outer_circle = gmsh.model.occ.addCircle(0, 0, 0, R_disk)
+    outer_loop   = gmsh.model.occ.addCurveLoop([outer_circle])
+
+    rod_circles, rod_loops = [], []
+    for (rx, ry) in kept_rods:
+        c  = gmsh.model.occ.addCircle(rx, ry, 0, R_rod)
+        lp = gmsh.model.occ.addCurveLoop([c])
+        rod_circles.append(c)
+        rod_loops.append(lp)
+        
+    cool_circles, cool_loops = [], []
+    cooling_positions = []
+
+    if add_cooling_rods:
+        # pour chaque assemblage, on place une barre au centre de chaque carré
+        # formé par 4 crayons voisins — un assemblage m×m a (m-1)² tels carrés
+        for (cx, cy) in centers:
+            for i in range(m - 1):
+                for j in range(m - 1):
+                    bx = cx + (i - (m - 2) / 2.0) * pitch
+                    by = cy + (j - (m - 2) / 2.0) * pitch
+                    c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
+                    lp = gmsh.model.occ.addCurveLoop([c])
+                    cool_circles.append(c)
+                    cool_loops.append(lp)
+                    cooling_positions.append((bx, by))
+
+    # --- Ajout des trous de refroidissement dans la surface d'eau ---
+    surface = gmsh.model.occ.addPlaneSurface([outer_loop] + rod_loops + cool_loops)
+    gmsh.model.occ.synchronize()
+
+    # --- Groupes physiques ---
+    gmsh.model.addPhysicalGroup(2, [surface],       tag=1,  name="water")
+    gmsh.model.addPhysicalGroup(1, [outer_circle],  tag=10, name="outer_boundary")
+    if rod_circles:
+        gmsh.model.addPhysicalGroup(1, rod_circles, tag=20, name="rod_surfaces")
+    # --- Création du groupe physique pour appliquer la condition de Neumann dynamique ---
+    if cool_circles:
+        gmsh.model.addPhysicalGroup(1, cool_circles, tag=30, name="cooling_surfaces")
+
+    # --- Champ de taille (Distance depuis crayons + Threshold) ---
+    dist_field = gmsh.model.mesh.field.add("Distance")
+    # --- On affine le maillage aussi autour des barres de refroidissement ---
+    gmsh.model.mesh.field.setNumbers(dist_field, "CurvesList", rod_circles + cool_circles)
+    threshold_field = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(threshold_field, "InField",  dist_field)
+    gmsh.model.mesh.field.setNumber(threshold_field, "SizeMin",  smin)
+    gmsh.model.mesh.field.setNumber(threshold_field, "SizeMax",  smax)
+    gmsh.model.mesh.field.setNumber(threshold_field, "DistMin",  0.0)
+    gmsh.model.mesh.field.setNumber(threshold_field, "DistMax",   L_asm/1)
+    gmsh.model.mesh.field.setAsBackgroundMesh(threshold_field)
+
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints",         0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature",      0)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+
+    # --- Génération ---
+    gmsh.model.mesh.generate(2)
+    gmsh.model.mesh.setOrder(order)
+
+    # --- Extraction (format identique à mesh1/mesh2) ---
+    elemType = gmsh.model.mesh.getElementType("triangle", order)
+    nodeTags, nodeCoords, _ = gmsh.model.mesh.getNodes()
+    elemTags, elemNodeTags  = gmsh.model.mesh.getElementsByType(elemType)
+
+    # --- Ajout du tag 'cooling_surfaces' pour que le main() puisse le récupérer ---
+    bnds = [("outer_boundary", 1), ("rod_surfaces", 1), ("cooling_surfaces", 1)]
+    bnds_tags = []
+    for name, dim in bnds:
+        tag = next(g[1] for g in gmsh.model.getPhysicalGroups(dim)
+                   if gmsh.model.getPhysicalName(dim, g[1]) == name)
+        bnds_tags.append(gmsh.model.mesh.getNodesForPhysicalGroup(dim, tag)[0])
+
+    return elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions
 ########################################################
 ########################################################
 
@@ -490,3 +754,44 @@ def build_2d_mesh(geo_filename, mesh_size, order=1):
     elemTags, elemNodeTags = gmsh.model.mesh.getElementsByType(elemType)
 
     return elemType, nodeTags, nodeCoords, elemTags, elemNodeTags
+
+
+
+def get_boundary_segments(physical_tag, order):
+    """
+    Récupère les segments 1D du groupe physique donné et prépare
+    leur quadrature. Retourne tout ce qu'il faut pour assembler
+    un terme de Neumann sur ce bord.
+    """
+    entities = gmsh.model.getEntitiesForPhysicalGroup(1, physical_tag)
+
+    elemTags_list  = []
+    nodeTags_list  = []
+    line_elemType  = None
+
+    for ent in entities:
+        etypes, etags, enodes = gmsh.model.mesh.getElements(dim=1, tag=int(ent))
+        if len(etypes) == 0:
+            continue
+        line_elemType = int(etypes[0])
+        elemTags_list.append(etags[0])
+        nodeTags_list.append(enodes[0])
+
+    elemTags_1d = np.concatenate(elemTags_list).astype(np.int64)
+    nodeTags_1d = np.concatenate(nodeTags_list).astype(np.int64)
+
+    # Quadrature sur les segments (même mécanique que pour les triangles)
+    xi_1d, w_1d, N_1d, gN_1d = prepare_quadrature_and_basis(line_elemType, order)
+
+    # Jacobiens uniquement sur les entités du groupe physique concerné
+    jac_list, det_list, xphys_list = [], [], []
+    for ent in entities:
+        j, d, x = gmsh.model.mesh.getJacobians(
+            line_elemType, xi_1d.flatten(), tag=int(ent))
+        jac_list.append(j)
+        det_list.append(d)
+        xphys_list.append(x)
+
+    return (line_elemType, elemTags_1d, nodeTags_1d,
+            np.concatenate(jac_list), np.concatenate(det_list),
+            np.concatenate(xphys_list), w_1d, N_1d, gN_1d)
