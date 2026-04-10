@@ -4,9 +4,8 @@ import matplotlib.pyplot as plt
 import os
 
 from gmsh_utils import (
-    border_dofs_from_tags, build_2d_rectangle_mesh, gmsh_init, gmsh_finalize,
-    prepare_quadrature_and_basis, get_jacobians, get_boundary_segments,
-    mesh1, mesh2, mesh3, mesh4, mesh5
+    border_dofs_from_tags,  gmsh_init, gmsh_finalize,
+    prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5
 )
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
 from physics import build_water_lookup_table, water_props_at, solve_diffusion, compute_h_bar, cooling_rhs_fn, exponential_flux
@@ -19,231 +18,149 @@ from plot_utils import plot_mesh_2d, plot_fe_solution_2d
 import gmsh
 
 
-#le nouveau code stiffness encore les conditions de neumann qu'il nous faut pour NUC
-
-
-def main(L=1.0, H=1.0, h=1.0, order=1):
-
-    # ============================================================
-    # FONCTIONS MATHÉMATIQUES DE TEST
-    # ============================================================
-
-    def kappa(x): return 1.0  #à regarder : kappa est 1 pour tout le code ?? 
+def main(order=1):
 
     # ============================================================
     # PARAMÈTRES CENTRALISÉS
     # ============================================================
 
-    # --- Géométrie des crayons et assemblages ---
-    m_val = 3                # Nombre de crayons combustibles sur le côté d'un assemblage NE PEUT PAS ETRE 1 SI COOLING
-    n_val = 1                # Nombre total d'assemblages dans la cuve (choix restreint à 1, 4 ou 9 pour la symétrie)
-    pitch_val = 18.7e-3      # Pas du réseau : distance entre le centre de deux crayons voisins (en mètres)
-    R_rod_val = 6.15e-3      # Rayon extérieur physique d'un crayon combustible (en mètres)
-    
-    # --- Géométrie de l'eau (espacements et cuve) ---
-    gap_assembly_val = 12e-3 # Épaisseur de la lame d'eau qui sépare deux assemblages voisins (en mètres)
-    gap_outer_val = 75e-3    # Épaisseur de la lame d'eau périphérique (entre les assemblages et la paroi de la cuve)
+    # --- Géométrie ---
+    m_val               = 3         # crayons par rangée par assemblage (≥2 si cooling)
+    n_val               = 1         # assemblages (1, 4 ou 9)
+    pitch_val           = 18.7e-3   # pas du réseau [m]
+    R_rod_val           = 6.15e-3   # rayon crayon [m]
+    R_cooling_val       = 2.0e-3    # rayon barre refroidissement [m]
+    gap_assembly_val    = 12e-3     # espace inter-assemblages [m]
+    add_cooling_rods_val = True     # activer/désactiver les barres
 
-    R_cooling_val = 2.0e-3       # rayon des barres de refroidissement [m]
-    
-    add_cooling_rods_val = False  # True pour activer les barres, False pour les désactiver
+    # --- Maillage ---
+    mesh_refinement     = 1.0       # >1 = plus fin, <1 = plus grossier
+    smin_val            = 0.5e-3 / mesh_refinement  # taille min éléments [m]
+    SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
-    # --- Paramètres du maillage (Gmsh) ---
-    smin_val = 1.5e-3        # Taille minimale des éléments (triangles) du maillage, contrôle la précision près des bords
+    # --- Physique ---
+    T0_K    = 553.15    # température initiale [K] (~280°C, REP nominal)
+    P_MPa   = 15.5      # pression [MPa] = 155 bars
+    theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
+    dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
+    t_end   = 60       # durée totale [s]
+    q0      = 5e3       # flux initial sur les crayons [W/m²]
+    lam     = 1/80.0    # constante décroissance exponentielle [1/s]
+    T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
+    H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
+    t_insert = 20.0     # instant d'insertion des barres [s]
 
     # ============================================================
-    # MAILLAGE ET AFFICHAGE
+    # ETAPE 1 : MAILLAGE
     # ============================================================
 
     gmsh_init("poisson_2d")
 
-    # 2. APPEL DU MAILLAGE (On récupère cooling_positions à la fin)
-    elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions = mesh5(
-        m=m_val, n=n_val, order=order, pitch=pitch_val, R_rod=R_rod_val,
-        add_cooling_rods=add_cooling_rods_val, R_cooling=R_cooling_val,
-        gap_assembly=gap_assembly_val, gap_outer=gap_outer_val, smin=smin_val
-    )
+    # Génération du maillage rectangulaire périodique avec crayons et barres
+    elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions = mesh5(m=m_val, n=n_val, order=order, pitch=pitch_val, R_rod=R_rod_val, R_cooling=R_cooling_val, gap_assembly=gap_assembly_val, R_core=None, smin=smin_val, add_cooling_rods=add_cooling_rods_val)
 
-    SAVE_PDF = True
     path = os.path.join(os.path.dirname(__file__), "mesh_plot.pdf")
-
-    # 3. APPEL DE L'AFFICHAGE (On lui passe directement les positions calculées)
-    plot_mesh_2d(
-        elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags,
-        save_path=path if SAVE_PDF else None,
-        cooling_rods=cooling_positions,
-        R_cooling=R_cooling_val
-    )
-
+    plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, save_path=path if SAVE_PDF else None, cooling_rods=cooling_positions, R_cooling=R_cooling_val)
     plt.show()
 
     # ============================================================
-    # MAPPING TAGS GMSH -> DEGRÉS DE LIBERTÉ
+    # ETAPE 2 : MAPPING TAGS GMSH → DEGRÉS DE LIBERTÉ
     # ============================================================
 
-    # define a mapping between the nodeTags returned from gmsh and the dofs of the system
-    # ------------------------------------------
-    unique_dofs_tags = np.unique(elemNodeTags)
+    # Gmsh numérote les noeuds arbitrairement ; on construit une table de correspondance
+    # tag_to_dof[tag_gmsh] = indice DOF dans les vecteurs/matrices du solveur
+    unique_dofs_tags = np.unique(elemNodeTags)  # noeuds effectivement utilisés
     num_dofs = len(unique_dofs_tags)
     max_tag = int(np.max(nodeTags))
-    tag_to_dof = np.full(max_tag + 1, -1, dtype=int)
+    tag_to_dof = np.full(max_tag + 1, -1, dtype=int)  # -1 = tag non utilisé
     for i, tag in enumerate(unique_dofs_tags):
         tag_to_dof[int(tag)] = i
-    # ------------------------------------------
 
     # ============================================================
-    # ASSEMBLAGE DES MATRICES K ET M
+    # ETAPE 3 : ASSEMBLAGE DES MATRICES K ET M
     # ============================================================
 
+    # Quadrature de Gauss et fonctions de base sur l'élément de référence
     xi, w, N, gN = prepare_quadrature_and_basis(elemType, order)
+    # Jacobiens de la transformation élément référence → physique
     jac, det, coords = get_jacobians(elemType, xi)
 
-    K_lil, F = assemble_stiffness_and_rhs(elemTags, elemNodeTags, jac, det, coords, w, N, gN, lambda x: 1.0, lambda x: 0.0, tag_to_dof)
-
-    # --- LIGNE À AJOUTER POUR LA MASSE ---
+    # K géométrique : kappa=1 car le vrai k(T) est appliqué dans solve_diffusion via k_of_T
+    K_lil, _ = assemble_stiffness_and_rhs(elemTags, elemNodeTags, jac, det, coords, w, N, gN, lambda x: 1.0, lambda x: 0.0, tag_to_dof)
+    # Matrice de masse M pour le terme en dU/dt
     M_lil = assemble_mass(elemTags, elemNodeTags, det, w, N, tag_to_dof)
-    # -------------------------------------
+    K = K_lil.tocsr()  # format CSR pour spsolve
+    M = M_lil.tocsr()
 
-    K = K_lil.tocsr()
-    M = M_lil.tocsr() #nouveau par rapport à avant pour la Masse (à vérifier)
-
-    # ============================================================
-    # ETAPE 1 : VÉRIFICATION MATRICES K ET M
-    # ============================================================
-
-    print(f"[E1] K shape : {K.shape}, nnz = {K.nnz}")
-    print(f"[E1] M shape : {M.shape}, nnz = {M.nnz}")
-    print(f"[E1] Diag M toujours positive : {np.all(M.diagonal() > 0)}")
-    print(f"[E1] Diag K toujours positive : {np.all(K.diagonal() > 0)}")
-    print(f"[E1] Somme lignes K (min, max) : {K.sum(axis=1).min():.2e}, {K.sum(axis=1).max():.2e}")
-    print(f"[E1] Somme lignes M (min, max) : {M.sum(axis=1).min():.2e}, {M.sum(axis=1).max():.2e}")
+    print(f"[E3] K : {K.shape}, nnz={K.nnz} | M : {M.shape}, nnz={M.nnz}")
+    print(f"[E3] Diag M>0 : {np.all(M.diagonal()>0)} | Diag K>0 : {np.all(K.diagonal()>0)}")
 
     # ============================================================
-    # ETAPE 2 : LOOKUP TABLE IAPWS
+    # ETAPE 4 : LOOKUP TABLE IAPWS-IF97
     # ============================================================
 
-    T0_K    = 553.15   # température initiale de l'eau [K] (~280°C, conditions REP)
-    P_MPa   = 15.5     # pression nominale [MPa] = 155 bars
+    # Précalcul des propriétés de l'eau sur grille T à pression constante
     lut = build_water_lookup_table(T_min_K=400.0, T_max_K=650.0, n_points=250, P_MPa=P_MPa)
-    # Vérification : propriétés à T0
-    props0 = water_props_at(T0_K, lut)
-    print(f"[E2] À T={T0_K}K : rho={props0['rho']:.1f} kg/m³, cp={props0['cp']:.1f} J/kgK")
-    print(f"[E2] À T={T0_K}K : k={props0['k']:.4f} W/mK, nu={props0['nu']:.2e} m²/s")
-    print(f"[E2] À T={T0_K}K : beta={props0['beta']:.2e} 1/K, alpha={props0['alpha']:.2e} m²/s")
-    
+    props0 = water_props_at(T0_K, lut)  # propriétés à la température initiale
+    rho_val = props0["rho"]  # densité supposée constante (hypothèse ρ ≈ cste)
+    cp_val  = props0["cp"]   # capacité thermique supposée constante (idem)
+    print(f"[E4] À T={T0_K}K : rho={rho_val:.1f} kg/m³, cp={cp_val:.1f} J/kgK, k={props0['k']:.4f} W/mK")
 
-    
     # ============================================================
-    # ETAPE 3 : BOUCLE TEMPORELLE SANS SOURCE
+    # ETAPE 5 : TERMES SOURCE — CRAYONS ET BARRES
     # ============================================================
 
-    # Paramètres physiques constants (évalués à T0 via la lookup table)
-    props0 = water_props_at(T0_K, lut)
-    rho_val = props0["rho"]
-    cp_val  = props0["cp"]
-    k_val   = props0["k"]
-
-    # Paramètres temporels
-    theta  = 1.0          # Euler implicite (stable inconditionnellement)
-    dt     = 1.0          # pas de temps [s]
-    t_end  = 100       # durée totale [s]
-
-    # Condition initiale : eau uniforme à T0
-    U0 = np.full(num_dofs, T0_K)
-    """
-    # Boucle temporelle déléguée à physics.py (rhs_extra=None : pas de source à cette étape)
-    U = solve_diffusion(M, K, U0, rho_val, cp_val, k_val,
-                             dt, t_end, theta=theta,
-                             rhs_extra=None, print_every=10, label="E3")
-    
-    """
-    # ============================================================
-    # ETAPE 4 : FLUX EXPONENTIEL SUR LES CRAYONS
-    # ============================================================
-    
-    # Segments 1D des crayons (groupe physique 20) + quadrature associée
+    # Récupération des segments 1D du bord des crayons (tag 20) pour intégration Neumann
     rod_data = get_boundary_segments(physical_tag=20, order=order)
-    print(f"[E4] {len(rod_data[1])} segments sur les crayons, quadrature prête")
-    
-    # Paramètres du flux de puissance résiduelle après arrêt
-    q0 = 5e3   # [W/m²]
-    lam = 1/80.0  # constante de décroissance [1/s]
-    
-    def rod_rhs(t, U):
-        # Flux scalaire à l'instant t, puis assemblage du vecteur nodal
-        q = exponential_flux(t, q0, lam)
-        return build_neumann_vector(num_dofs, rod_data, q, tag_to_dof)
-    
-    def k_of_T(U):
-        T_mean = float(np.clip(np.mean(U), 400.0, 617.0))
-        k = water_props_at(T_mean, lut)["k"]
-        return k
-    
+    print(f"[E5] {len(rod_data[1])} segments sur les crayons")
 
-    
-    # ============================================================
-    # ETAPE 6 : FLUX DES BARRES DE REFROIDISSEMENT
-    # ============================================================
-    
+    # Flux Neumann sur les crayons : q(t) = q0 * exp(-lam*t), assemblé en vecteur nodal
+    def rod_rhs(t, U): return build_neumann_vector(num_dofs, rod_data, exponential_flux(t, q0, lam), tag_to_dof)
+
+    # Conductivité non linéaire : interpolation IAPWS à T_mean clippée dans [400, 617] K
+    def k_of_T(U): return water_props_at(float(np.clip(np.mean(U), 400.0, 617.0)), lut)["k"]
+
     if add_cooling_rods_val:
+        # Récupération des segments 1D des barres de refroidissement (tag 30)
         cooling_data = get_boundary_segments(physical_tag=30, order=order)
-        print(f"[E6] {len(cooling_data[1])} segments sur les barres de refroidissement")
-        
+        print(f"[E5] {len(cooling_data[1])} segments sur les barres de refroidissement")
+        # DOFs des noeuds sur les barres (utilisés pour le masque colormap et Churchill-Chu)
         cooling_node_tags = np.unique(cooling_data[2])
         cooling_dofs = border_dofs_from_tags(cooling_node_tags, tag_to_dof)
-        
-        T_ext    = 500.0
-        H_bar    = 0.5
-        t_insert = 20.0
-        
-        def cooling_rhs(t, U):
-            return cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs,
-                                T_ext, H_bar, t_insert, lut, tag_to_dof)
-
-        def combined_rhs(t, U):
-            return rod_rhs(t, U) + cooling_rhs(t, U)
+        # Flux convectif Churchill-Chu : h(T_moy) * (T_moy - T_ext), actif après t_insert
+        def cooling_rhs(t, U): return cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs, T_ext, H_bar, t_insert, lut, tag_to_dof)
+        def combined_rhs(t, U): return rod_rhs(t, U) + cooling_rhs(t, U)
     else:
         cooling_dofs = np.array([], dtype=int)
-        def combined_rhs(t, U):
-            return rod_rhs(t, U)
-    
+        def combined_rhs(t, U): return rod_rhs(t, U)
+
+    # ============================================================
+    # ETAPE 6 : SIMULATION TEMPORELLE (PICARD NON LINÉAIRE)
+    # ============================================================
+
+    U0 = np.full(num_dofs, T0_K)  # condition initiale : eau uniforme à T0
     frames = []
+    def collect_frame(step, t, U): frames.append((t, U.copy()))  # stockage pour animation
 
-    def collect_frame(step, t, U):
-        frames.append((t, U.copy()))
+    # Résolution du système M*dU/dt + k(U)*K*U = F par schéma θ + itérations de Picard
+    U = solve_diffusion(M, K, U0, rho_val, cp_val, k_of_T, dt, t_end, theta=theta, rhs_extra=combined_rhs, print_every=10, label="SIM", plot_callback=collect_frame)
 
-    U = solve_diffusion(M, K, U0, rho_val, cp_val, k_of_T,
-                        dt, t_end, theta=theta,
-                        rhs_extra=combined_rhs, print_every=10, label="E6",
-                        plot_callback=collect_frame)
-    
-    # percentiles pour éviter que quelques noeuds froids au contact des barres
-    # écrasent toute l'échelle — le min strict donnait 465K alors qu'on voyait
-    # rien en dessous de 540K sur le plot
-    
-    """
+    # ============================================================
+    # ETAPE 7 : ANIMATION
+    # ============================================================
+
+    # Exclure les noeuds des barres du calcul d'échelle colormap en commentant les petites T_global et décommentant les autres (et inversement)
+    # (trop froids au contact direct, écraserait la dynamique du champ T)
     interior_mask = np.ones(num_dofs, dtype=bool)
     interior_mask[cooling_dofs] = False
-    all_temps = np.concatenate([U_i[interior_mask] for _, U_i in frames])
-    T_global_min = min(np.min(U_i[interior_mask]) for _, U_i in frames)
-    T_global_max = max(np.max(U_i[interior_mask]) for _, U_i in frames)
-    T_global_min = float(np.percentile(all_temps, 2))
-    T_global_max = float(np.percentile(all_temps, 98))
-    print(f"[ANIM] Echelle température (hors barres) : {T_global_min:.1f} K — {T_global_max:.1f} K")
-    print(f"[ANIM] Echelle température (p2-p98, hors barres) : {T_global_min:.1f} K — {T_global_max:.1f} K")
-    # --- Animation post-simulation ---
-    from matplotlib.animation import FuncAnimation
-    """
-    #version sans les pourcentiles
-    # on exclut les noeuds des barres de refroidissement du calcul de l'echelle
-    # sinon les noeuds froids au contact direct des barres ecrasent tout le reste
-    interior_mask = np.ones(num_dofs, dtype=bool)
-    interior_mask[cooling_dofs] = False
+    #T_global_min = min(np.min(U_i[interior_mask]) for _, U_i in frames)
+    #T_global_max = max(np.max(U_i[interior_mask]) for _, U_i in frames)
+    T_global_min = min(np.min(U_i) for _, U_i in frames)
+    T_global_max = max(np.max(U_i) for _, U_i in frames)
+    T_global_min_C = T_global_min - 273.15 #pour avoir en °C dans le plot 
+    T_global_max_C = T_global_max - 273.15
+    print(f"[E7] Echelle T (hors barres) : {T_global_min:.1f} — {T_global_max:.1f} K")
 
-    T_global_min = min(np.min(U_i[interior_mask]) for _, U_i in frames)
-    T_global_max = max(np.max(U_i[interior_mask]) for _, U_i in frames)
-    print(f"[ANIM] Echelle température (hors barres) : {T_global_min:.1f} K — {T_global_max:.1f} K")
-    # --- Animation post-simulation ---
     from matplotlib.animation import FuncAnimation
     fig_anim, ax_anim = plt.subplots(figsize=(8, 6))
     cbar_anim = [None]
@@ -253,39 +170,23 @@ def main(L=1.0, H=1.0, h=1.0, order=1):
         if cbar_anim[0] is not None:
             cbar_anim[0].remove()
         ax_anim.clear()
-        contour = plot_fe_solution_2d(
-            elemNodeTags, nodeCoords, nodeTags, U_i, tag_to_dof,
-            show_mesh=False, ax=ax_anim,
-            cooling_rods=cooling_positions,
-            R_cooling=R_cooling_val,
-            add_colorbar=False,
-            vmin=T_global_min,
-            vmax=T_global_max
-        )
-        cbar_anim[0] = fig_anim.colorbar(contour, ax=ax_anim, label='T [K]')
-        ax_anim.set_title(f"t = {t_i:.1f} s")
+        contour = plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U_i - 273.15, tag_to_dof, show_mesh=False, ax=ax_anim, cooling_rods=cooling_positions, R_cooling=R_cooling_val, add_colorbar=False, vmin=T_global_min_C, vmax=T_global_max_C, cmap='jet')        
+        cbar_anim[0] = fig_anim.colorbar(contour, ax=ax_anim, label="Temperature [°C]")
+        ax_anim.set_title(f"t = {t_i:.1f} s  |  Tmax = {np.max(U_i) - 273.15:.1f} °C")
         ax_anim.set_aspect('equal')
 
     anim = FuncAnimation(fig_anim, animate, frames=len(frames), interval=100, repeat=True)
     plt.show(block=True)
 
     gmsh_finalize()
-    plt.show(block=True)
     return
 
 
 
+
+
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Poisson 2D with Gmsh FE")
+    parser = argparse.ArgumentParser(description="Simulation thermique REP — éléments finis 2D")
     parser.add_argument("-order", type=int, default=1)
-    parser.add_argument("-L", type=float, default=1.0)
-    parser.add_argument("-H", type=float, default=1.0)
-    parser.add_argument("-hc", type=float, default=0.1)
     args = parser.parse_args()
-    order = args.order
-    L = args.L
-    H = args.H
-    h = args.hc
-
-    main(L, H, h, order)
+    main(order=args.order)

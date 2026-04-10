@@ -109,7 +109,7 @@ def plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof,
                          show_mesh=False, ax=None, label=None,
                          gap_outer=75e-3, R_cooling=2.0e-3,
                          cooling_rods=None, add_colorbar=True,
-                         vmin=None, vmax=None): 
+                         vmin=None, vmax=None, cmap='coolwarm'):
     #pas oublier de changer R cooling de la pastille si on change celle des cooling barres physiques aussi 
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -143,7 +143,7 @@ def plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U, tag_to_dof,
     
 
     levels = np.linspace(vmin, vmax, 100)
-    contour = ax.tricontourf(x, y, triangles, U, levels=levels, cmap='coolwarm', vmin=vmin, vmax=vmax)
+    contour = ax.tricontourf(x, y, triangles, U, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax)    
     if show_mesh:
         ax.triplot(x, y, triangles, color='white', linewidth=0.2, alpha=0.3)
         
