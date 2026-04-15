@@ -8,7 +8,7 @@ from gmsh_utils import prepare_quadrature_and_basis, get_jacobians
 
 
 # Plot the generated mesh. Highlight the physical groups created. 
-def plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, tag_to_index=None, save_path=None, cooling_rods=None, R_cooling=8.0e-3):
+def plot_mesh_2d(nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, tag_to_index=None, save_path=None, cooling_rods=None, R_cooling=8.0e-3):
     coords = nodeCoords.reshape(-1, 3)
     x = coords[:, 0]
     y = coords[:, 1]
@@ -36,11 +36,11 @@ def plot_mesh_2d(elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, b
     # Plot the skeleton
     ax.triplot(mesh_triang, color='black', lw=0.5, alpha=0.4)
 
-    colors = ["red", "darkblue", "orange", "mediumpurple", "pink"]
+    colors = ["red", "darkblue", "green", "mediumpurple", "pink"]
     for i, (name, dim) in enumerate(bnds):
         tags = bnds_tags[i]
         indices = tag_to_index[tags.astype(int)]
-        ax.scatter(x[indices], y[indices], label=name, s=0.1, zorder=3, 
+        ax.scatter(x[indices], y[indices], label=name, s=0.9, zorder=3, 
                    marker="o", facecolor="None", edgecolor=colors[i % len(colors)])#changer le s pour la taille des bords
 
 

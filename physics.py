@@ -52,16 +52,24 @@ def water_props_at(T_K, lut):
 def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end, theta=1.0, rhs_extra=None, nl_tol=1e-6, nl_maxiter=20, print_every=10, label="", plot_callback=None):
     """
     Resout rho*cp * dU/dt + K_phys * U = F par schema theta.
-    Si k est callable (k depend de T), on itere avec Picard a chaque pas de temps.
+    rho, cp, k peuvent etre des scalaires ou des fonctions de T (callables).
     theta=1.0 : schema d'Euler implicite (stable inconditionnellement)
     theta=0.5 : schema de Crank-Nicolson (ordre 2 en temps)
     """
-    k_is_fun = callable(k)          # True si k = k(T), False si k est une constante scalaire
-    M_phys = rho * cp * M           # matrice de masse physique : rho*cp*M
+    k_is_fun   = callable(k)
+    rhocp_is_fun = callable(rho) or callable(cp)   # True si rho ou cp dependent de T
 
-    if not k_is_fun:
+    def get_M_phys(V):
+        rho_v = rho(V) if callable(rho) else rho
+        cp_v  = cp(V)  if callable(cp)  else cp
+        return rho_v * cp_v * M   # matrice de masse physique : rho(T)*cp(T)*M
+
+    if not rhocp_is_fun:
+        M_phys = get_M_phys(None)   # M_phys constant, calcule une fois
+
+    if not k_is_fun and not rhocp_is_fun:
         K_phys = k * K
-        A_lin = (M_phys + theta * dt * K_phys).tocsr()   # systeme lineaire constant si k uniforme, precalcule une fois
+        A_lin = (M_phys + theta * dt * K_phys).tocsr()   # systeme entierement lineaire, precalcule une fois
 
     U = U0.copy()
     n_steps = int(t_end / dt)
@@ -71,30 +79,42 @@ def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end, theta=1.0, rhs_extra=None, 
         t = step * dt
 
         # ---- second membre B au pas courant (T^n connu) ----
-        if k_is_fun:
-            k_n    = k(U)           # conductivite evaluee a la temperature courante
-            K_phys = k_n * K
-        B = (M_phys - (1 - theta) * dt * K_phys).dot(U)   # partie explicite du schema theta
-        if rhs_extra is not None:
-            B = B + dt * rhs_extra(t, U)                   # ajout des termes sources exterieurs (Neumann, etc.)
+        if not rhocp_is_fun:
+            if k_is_fun:
+                k_n    = k(U)
+                K_phys = k_n * K
+            B = (M_phys - (1 - theta) * dt * K_phys).dot(U)
+            if rhs_extra is not None:
+                B = B + dt * rhs_extra(t, U)
 
         # ---- resolution du systeme lineaire ----
-        if k_is_fun:
-            # iterations de Picard : cherche V tel que (M_phys + theta*dt*k(V)*K)*V = B
+        if k_is_fun or rhocp_is_fun:
+            # iterations de Picard : cherche V tel que A(V)*V = B(V)
             V = U.copy()
             for it in range(nl_maxiter):
-                kv  = k(V)
-                A_v = (M_phys + theta * dt * kv * K).tocsr()
-                R   = A_v.dot(V) - B           # residu de Picard
+                kv       = k(V) if k_is_fun else k
+                M_phys_v = get_M_phys(V) if rhocp_is_fun else M_phys   # M_phys recalcule si rho/cp variables
+                K_phys_v = kv * K
+
+                if rhocp_is_fun:
+                    # B depend de V via M_phys(V) -> recalcul a chaque iteration
+                    B_v = (M_phys_v - (1 - theta) * dt * K_phys_v).dot(U)
+                    if rhs_extra is not None:
+                        B_v = B_v + dt * rhs_extra(t, U)
+                else:
+                    B_v = B   # B fixe si rho*cp constant
+
+                A_v = (M_phys_v + theta * dt * K_phys_v).tocsr()
+                R   = A_v.dot(V) - B_v       # residu de Picard
                 res = np.linalg.norm(R)
-                if res < nl_tol:               # convergence atteinte
+                if res < nl_tol:             # convergence atteinte
                     break
-                V = V + spsolve(A_v, -R)       # correction de Newton/Picard
+                V = V + spsolve(A_v, -R)     # correction de Picard
             else:
                 print(f"[{label}] WARN Picard non converge step={step} t={t:.1f}s |R|={res:.2e}")
             U = V
         else:
-            U = spsolve(A_lin, B)              # resolution directe si k constant
+            U = spsolve(A_lin, B)            # resolution directe si tout est constant
 
         # ---- gardes thermiques (seuils physiques REP) ----
         # (warning) seuils : Tmin LUT = 400 K, Tsat eau a 15.5 MPa = 618 K
@@ -108,7 +128,7 @@ def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end, theta=1.0, rhs_extra=None, 
             break
 
         if plot_callback is not None:
-            plot_callback(step, t, U)          # collecte du frame pour l'animation
+            plot_callback(step, t, U)        # collecte du frame pour l'animation
         if step % print_every == 0:
             print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.2f} K, Tmax={np.max(U):.2f} K")
 
