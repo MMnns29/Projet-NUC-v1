@@ -3,9 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-from gmsh_utils import (border_dofs_from_tags,  gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5)
+from gmsh_utils import (border_dofs_from_tags, gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5)
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
-from physics import build_water_lookup_table, water_props_at, solve_diffusion, compute_h_bar, cooling_rhs_fn, exponential_flux
+from physics import build_water_lookup_table, water_props_at, solve_diffusion, compute_h_bar, cooling_robin_terms, exponential_flux
 from mass import assemble_mass
 from plot_utils import plot_mesh_2d, plot_fe_solution_2d
 
@@ -35,7 +35,7 @@ def main(order=1):
     P_MPa   = 15.5      # pression [MPa] = 155 bars
     theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
     dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
-    t_end   = 67       # durée totale [s]
+    t_end   = 67        # durée totale [s]
     q0      = 5e3       # flux initial sur les crayons [W/m²]
     lam     = 1/80.0    # constante décroissance exponentielle [1/s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
@@ -123,15 +123,20 @@ def main(order=1):
         # Récupération des segments 1D des barres de refroidissement (tag 30)
         cooling_data = get_boundary_segments(physical_tag=30, order=order)
         print(f"[E5] {len(cooling_data[1])} segments sur les barres de refroidissement")
-        # DOFs des noeuds sur les barres (utilisés pour le masque colormap et Churchill-Chu)
+        # DOFs des noeuds sur les barres (pour Churchill-Chu)
         cooling_node_tags = np.unique(cooling_data[2])
         cooling_dofs = border_dofs_from_tags(cooling_node_tags, tag_to_dof)
-        # Flux convectif Churchill-Chu : h(T_moy) * (T_moy - T_ext), actif après t_insert, c'est Robin je crois 
-        def cooling_rhs(t, U): return cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs, T_ext, H_bar, t_insert, lut, tag_to_dof)
-        def combined_rhs(t, U): return rod_rhs(t, U) + cooling_rhs(t, U)
+        # Condition de Robin : h(T)*(T - T_ext) implicite via matrice R et vecteur G
+        def cooling_robin(t, U):
+            return cooling_robin_terms(t, U, num_dofs, cooling_data, cooling_dofs, T_ext, H_bar, t_insert, lut, tag_to_dof)
     else:
         cooling_dofs = np.array([], dtype=int)
-        def combined_rhs(t, U): return rod_rhs(t, U)
+        def cooling_robin(t, U):
+            return None, np.zeros(num_dofs)
+
+    # rhs_extra : uniquement les crayons (Neumann pur)
+    # robin_extra : barres de refroidissement (Robin implicite)
+    def combined_rhs(t, U): return rod_rhs(t, U)
 
     # ============================================================
     # ETAPE 6 : SIMULATION TEMPORELLE (PICARD NON LINÉAIRE)
@@ -141,9 +146,8 @@ def main(order=1):
     frames = []
     def collect_frame(step, t, U): frames.append((t, U.copy()))  # stockage pour animation
 
-    # Résolution du système M*dU/dt + k(U)*K*U = F par schéma θ + itérations de Picard
-    U = solve_diffusion(M, K, U0, rho_fun, cp_fun, k_of_T, dt, t_end, theta=theta, rhs_extra=combined_rhs, print_every=10, label="SIM", plot_callback=collect_frame)
-
+    # Résolution : M*dU/dt + (k(U)*K + R(U))*U = F + G  par schéma θ + Picard
+    U = solve_diffusion(M, K, U0, rho_fun, cp_fun, k_of_T, dt, t_end, theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin, print_every=10, label="SIM", plot_callback=collect_frame)
     # ============================================================
     # ETAPE 7 : ANIMATION
     # ============================================================

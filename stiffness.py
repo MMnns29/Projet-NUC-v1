@@ -111,11 +111,57 @@ def assemble_rhs_neumann(F, elemTags, conn, jac, det, xphys, w, N, gN, g_neu_fun
 
 def build_neumann_vector(num_dofs, boundary_data, flux_value, tag_to_dof):
     """
-    Wrapper : construit le vecteur Neumann complet pour un bord avec flux scalaire uniforme.
-    boundary_data : tuple retourne par get_boundary_segments()
-    flux_value    : flux scalaire a cet instant [W/m^2]
+    Vecteur Neumann : F_i = int_{Gamma} flux_value * phi_i ds
     """
-    _, elemTags, nodeTags, jac, det, xphys, w, N, gN = boundary_data   # deballage du tuple boundary_data
-    F = np.zeros(num_dofs)
-    assemble_rhs_neumann(F, elemTags, nodeTags, jac, det, xphys, w, N, gN, flux_value, tag_to_dof)
+    _, elem_tags, node_tags, jac, det, xphys, w, N, gN = boundary_data
+    ne   = len(elem_tags)
+    ngp  = len(w)
+    nloc = int(len(node_tags) // ne)
+
+    det_r  = np.asarray(det,       dtype=np.float64).reshape(ne, ngp)
+    conn_r = np.asarray(node_tags, dtype=np.int64  ).reshape(ne, nloc)
+    N_r    = np.asarray(N,         dtype=np.float64).reshape(ngp, nloc)
+
+    F = np.zeros(num_dofs, dtype=np.float64)
+    for e in range(ne):
+        dofs = tag_to_dof[conn_r[e, :]]
+        for g in range(ngp):
+            wg   = w[g]
+            detg = det_r[e, g]
+            for a in range(nloc):
+                Ia = int(dofs[a])
+                F[Ia] += wg * flux_value * N_r[g, a] * detg
     return F
+
+
+def build_robin_system(num_dofs, boundary_data, alpha, g_R, tag_to_dof):
+    """
+    Condition de Robin : alpha*u + k*dn(u) = alpha*g_R sur Gamma_R
+    R_ij = int_{Gamma_R} alpha * phi_i * phi_j ds
+    G_i  = int_{Gamma_R} alpha * g_R * phi_i ds
+    """
+    _, elem_tags, node_tags, jac, det, xphys, w, N, gN = boundary_data
+    ne   = len(elem_tags)
+    ngp  = len(w)
+    nloc = int(len(node_tags) // ne)
+
+    det_r  = np.asarray(det,       dtype=np.float64).reshape(ne, ngp)
+    conn_r = np.asarray(node_tags, dtype=np.int64  ).reshape(ne, nloc)
+    N_r    = np.asarray(N,         dtype=np.float64).reshape(ngp, nloc)
+
+    R = lil_matrix((num_dofs, num_dofs), dtype=np.float64)
+    G = np.zeros(num_dofs, dtype=np.float64)
+
+    for e in range(ne):
+        dofs = tag_to_dof[conn_r[e, :]]
+        for g in range(ngp):
+            wg   = w[g]
+            detg = det_r[e, g]
+            for a in range(nloc):
+                Ia = int(dofs[a])
+                G[Ia] += wg * alpha * g_R * N_r[g, a] * detg
+                for b in range(nloc):
+                    Ib = int(dofs[b])
+                    R[Ia, Ib] += wg * alpha * N_r[g, a] * N_r[g, b] * detg
+
+    return R.tocsr(), G

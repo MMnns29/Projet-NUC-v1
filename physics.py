@@ -1,7 +1,7 @@
 import numpy as np
 from iapws import IAPWS97
 from scipy.sparse.linalg import spsolve
-from stiffness import build_neumann_vector
+from stiffness import build_robin_system
 
 
 # ===============================================
@@ -49,27 +49,21 @@ def water_props_at(T_K, lut):
 # SOLVEUR TEMPOREL — SCHEMA THETA AVEC PICARD
 # ===============================================
 
-def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end, theta=1.0, rhs_extra=None, nl_tol=1e-6, nl_maxiter=20, print_every=10, label="", plot_callback=None):
-    """
-    Resout rho*cp * dU/dt + K_phys * U = F par schema theta.
-    rho, cp, k peuvent etre des scalaires ou des fonctions de T (callables).
-    theta=1.0 : schema d'Euler implicite (stable inconditionnellement)
-    theta=0.5 : schema de Crank-Nicolson (ordre 2 en temps)
-    """
-    k_is_fun   = callable(k)
-    rhocp_is_fun = callable(rho) or callable(cp)   # True si rho ou cp dependent de T
+def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end,
+                    theta=1.0, rhs_extra=None, robin_extra=None,
+                    nl_tol=1e-6, nl_maxiter=20,
+                    print_every=10, label="", plot_callback=None):
+
+    k_is_fun     = callable(k)
+    rhocp_is_fun = callable(rho) or callable(cp)
 
     def get_M_phys(V):
         rho_v = rho(V) if callable(rho) else rho
         cp_v  = cp(V)  if callable(cp)  else cp
-        return rho_v * cp_v * M   # matrice de masse physique : rho(T)*cp(T)*M
+        return rho_v * cp_v * M
 
     if not rhocp_is_fun:
-        M_phys = get_M_phys(None)   # M_phys constant, calcule une fois
-
-    if not k_is_fun and not rhocp_is_fun:
-        K_phys = k * K
-        A_lin = (M_phys + theta * dt * K_phys).tocsr()   # systeme entierement lineaire, precalcule une fois
+        M_phys = get_M_phys(None)
 
     U = U0.copy()
     n_steps = int(t_end / dt)
@@ -78,69 +72,73 @@ def solve_diffusion(M, K, U0, rho, cp, k, dt, t_end, theta=1.0, rhs_extra=None, 
     for step in range(n_steps):
         t = step * dt
 
-        # ---- second membre B au pas courant (T^n connu) ----
-        if not rhocp_is_fun:
-            if k_is_fun:
-                k_n    = k(U)
-                K_phys = k_n * K
-            B = (M_phys - (1 - theta) * dt * K_phys).dot(U)
-            if rhs_extra is not None:
-                B = B + dt * rhs_extra(t, U)
+        # ---- termes Robin (modifient A et B simultanement) ----
+        R_robin = 0
+        G_robin = np.zeros_like(U)
+        if robin_extra is not None:
+            R_mat, G_vec = robin_extra(t, U)
+            if R_mat is not None:
+                R_robin = R_mat        # s'ajoute a K dans A
+                G_robin = G_vec        # s'ajoute a F dans B
 
-        # ---- resolution du systeme lineaire ----
+        # ---- construction de K_phys (eventuel. non-lineaire) ----
+        if k_is_fun:
+            k_n    = k(U)
+            K_phys = k_n * K
+        elif not rhocp_is_fun:
+            K_phys = k * K
+
+        M_phys_cur = get_M_phys(U) if rhocp_is_fun else M_phys
+
+        # ---- second membre B ----
+        # B = [M - (1-theta)*dt*(K+R)] * U^n + dt*[theta*G + (1-theta)*G + rhs_extra]
+        K_total = K_phys + R_robin    # K physique + Robin : meme traitement theta
+        B = (M_phys_cur - (1 - theta) * dt * K_total).dot(U)
+        B += dt * G_robin             # terme source Robin
+        if rhs_extra is not None:
+            B += dt * rhs_extra(t, U)
+
+        # ---- matrice A ----
+        A = (M_phys_cur + theta * dt * K_total).tocsr()
+
+        # ---- resolution ----
         if k_is_fun or rhocp_is_fun:
-            # iterations de Picard : cherche V tel que A(V)*V = B(V)
             V = U.copy()
             for it in range(nl_maxiter):
-                kv       = k(V) if k_is_fun else k
-                M_phys_v = get_M_phys(V) if rhocp_is_fun else M_phys   # M_phys recalcule si rho/cp variables
-                K_phys_v = kv * K
-
-                if rhocp_is_fun:
-                    # B depend de V via M_phys(V) -> recalcul a chaque iteration
-                    B_v = (M_phys_v - (1 - theta) * dt * K_phys_v).dot(U)
-                    if rhs_extra is not None:
-                        B_v = B_v + dt * rhs_extra(t, U)
-                else:
-                    B_v = B   # B fixe si rho*cp constant
-
-                A_v = (M_phys_v + theta * dt * K_phys_v).tocsr()
-                R   = A_v.dot(V) - B_v       # residu de Picard
-                res = np.linalg.norm(R)
-                if res < nl_tol:             # convergence atteinte
+                R_v = A.dot(V) - B
+                res = np.linalg.norm(R_v)
+                if res < nl_tol:
                     break
-                V = V + spsolve(A_v, -R)     # correction de Picard
+                V = V + spsolve(A, -R_v)
             else:
-                print(f"[{label}] WARN Picard non converge step={step} t={t:.1f}s |R|={res:.2e}")
+                print(f"[{label}] WARN Picard non converge step={step} |R|={res:.2e}")
             U = V
         else:
-            U = spsolve(A_lin, B)            # resolution directe si tout est constant
+            U = spsolve(A, B)
 
-        # ---- gardes thermiques (seuils physiques REP) ----
-        # (warning) seuils : Tmin LUT = 400 K, Tsat eau a 15.5 MPa = 618 K
+        # ---- gardes thermiques ----
         if np.min(U) < 400.0:
-            print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.1f} K < 400 K, extrapolation LUT")
+            print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.1f} K < 400 K")
         if float(np.mean(U)) < 500.0:
-            print(f"[{label}] t={t:.1f}s : Tmoy={float(np.mean(U)):.1f} K — eau suffisamment refroidie, arret")
+            print(f"[{label}] t={t:.1f}s : eau suffisamment refroidie, arret")
             break
         if np.max(U) > 618.0:
-            print(f"[{label}] WARN : Tmax={np.max(U):.1f} K > Tsat=618 K — ebullition imminente, arret")
+            print(f"[{label}] WARN : Tmax={np.max(U):.1f} K > Tsat, arret")
             break
 
         if plot_callback is not None:
-            plot_callback(step, t, U)        # collecte du frame pour l'animation
+            plot_callback(step, t, U)
         if step % print_every == 0:
             print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.2f} K, Tmax={np.max(U):.2f} K")
 
     print(f"[{label}] Boucle terminee.")
     return U
 
-
 # ===============================================
 # FLUX RESIDUEL POST-ARRET REACTEUR
 # ===============================================
 
-def exponential_flux(t, q0, lam):
+def exponential_flux(t, q0, lam): #à remettre dans le main peut être 
     """
     Puissance residuelle decroissante apres arret reacteur (modele simplifie).
     q0  : flux initial [W/m^2]
@@ -176,17 +174,21 @@ def compute_h_bar(T_eau, T_ext, H_bar, lookup):
     return h, q_out
 
 
-# ===============================================
-# VECTEUR RHS NEUMANN — BARRES DE REFROIDISSEMENT
-# ===============================================
+def cooling_robin_terms(t, U, num_dofs, cooling_data, cooling_dofs,
+                        T_ext, H_bar, t_insert, lut, tag_to_dof):
+    """
+    Retourne (R, G) pour la condition de Robin sur les barres.
+    R : matrice Robin a ajouter a K  (None avant t_insert)
+    G : vecteur source Robin          (zeros avant t_insert)
+    """
+    from stiffness import build_robin_system
 
-def cooling_rhs_fn(t, U, num_dofs, cooling_data, cooling_dofs, T_ext, H_bar, t_insert, lut, tag_to_dof):
-    """Construit le vecteur RHS Neumann du aux barres de refroidissement a l'instant t."""
     if t < t_insert:
-        return np.zeros(num_dofs)          # barres pas encore inserees
+        return None, np.zeros(num_dofs)
 
     T_avg = float(np.mean(U[cooling_dofs]))
-    T_avg = np.clip(T_avg, 400.0, 617.0)  # (warning) clamp dans la plage valide de la LUT
+    T_avg = np.clip(T_avg, 400.0, 617.0)
+    h, _  = compute_h_bar(T_avg, T_ext, H_bar, lut)
 
-    h, q_out = compute_h_bar(T_avg, T_ext, H_bar, lut)
-    return build_neumann_vector(num_dofs, cooling_data, q_out, tag_to_dof)
+    R, G = build_robin_system(num_dofs, cooling_data, h, T_ext, tag_to_dof)
+    return R, G
