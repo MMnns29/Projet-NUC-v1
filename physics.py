@@ -174,17 +174,9 @@ def compute_h_bar(T_eau, T_ext, H_bar, lookup):
     return h, q_out
 
 
-def cooling_robin_terms(t, U, num_dofs, cooling_data, cooling_dofs,
-                        T_ext, H_bar, t_insert, lut, tag_to_dof):
-    """
-    Retourne (R, G) pour la condition de Robin sur les barres.
-    R : matrice Robin a ajouter a K  (None avant t_insert)
-    G : vecteur source Robin          (zeros avant t_insert)
-    """
+def cooling_robin_terms(U, num_dofs, cooling_data, cooling_dofs,
+                        T_ext, H_bar, lut, tag_to_dof):
     from stiffness import build_robin_system
-
-    if t < t_insert:
-        return None, np.zeros(num_dofs)
 
     T_avg = float(np.mean(U[cooling_dofs]))
     T_avg = np.clip(T_avg, 400.0, 617.0)

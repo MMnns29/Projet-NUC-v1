@@ -40,7 +40,6 @@ def main(order=1):
     lam     = 1/80.0    # constante décroissance exponentielle [1/s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
     H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
-    t_insert = 20.0     # instant d'insertion des barres [s]
 
     # --- Lookup table IAPWS ---
     T_lut_min   = 400.0   # borne basse LUT [K] — aussi utilisée comme garde thermique
@@ -128,7 +127,8 @@ def main(order=1):
         cooling_dofs = border_dofs_from_tags(cooling_node_tags, tag_to_dof)
         # Condition de Robin : h(T)*(T - T_ext) implicite via matrice R et vecteur G
         def cooling_robin(t, U):
-            return cooling_robin_terms(t, U, num_dofs, cooling_data, cooling_dofs, T_ext, H_bar, t_insert, lut, tag_to_dof)
+            return cooling_robin_terms(U, num_dofs, cooling_data, cooling_dofs,
+                                    T_ext, H_bar, lut, tag_to_dof)    
     else:
         cooling_dofs = np.array([], dtype=int)
         def cooling_robin(t, U):
