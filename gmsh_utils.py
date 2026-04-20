@@ -33,7 +33,7 @@ def border_dofs_from_tags(l_tags, tag_to_dof):
     return tag_to_dof[l_tags[valid_mask]]
 
 
-def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap_assembly=12e-3, smin=1.5e-3, add_cooling_rods=True):
+def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap_assembly=12e-3, R_core=None, smin=1.5e-3, add_cooling_rods=True):
 
     import sys, math
     assert n in (1, 4, 9), "n doit être 1, 4 ou 9"
@@ -77,6 +77,14 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap
     hw   = L_cluster / 2.0 + gap_assembly / 2.0
     smax = L_cluster / 6.0  # taille max des éléments loin des bords (adaptatif)
 
+    # Filtrage optionnel des crayons hors d'un rayon R_core
+    if R_core is not None:
+        kept_rods = [(rx, ry) for (rx, ry) in all_rods if math.hypot(rx, ry) <= R_core]
+        n_removed = len(all_rods) - len(kept_rods)
+        if n_removed:
+            print("Info : %d crayons supprimes (R_core=%.1f mm)" % (n_removed, R_core*1e3))
+    else:
+        kept_rods = all_rods
 
     # ============================================================
     # GÉOMÉTRIE GMSH (OCC)
@@ -96,7 +104,7 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap
 
     # Crayons combustibles — trous dans la surface eau (Neumann : flux q(t) imposé)
     rod_circles, rod_loops = [], []
-    for (rx, ry) in all_rods:
+    for (rx, ry) in kept_rods:
         c  = gmsh.model.occ.addCircle(rx, ry, 0, R_rod)
         lp = gmsh.model.occ.addCurveLoop([c])
         rod_circles.append(c)
@@ -129,6 +137,22 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap
                     cool_circles.append(c)
                     cool_loops.append(lp)
                     cooling_positions.append((bx, by))
+
+            # ==========================================
+            # NOUVEAU : Barres dans les 4 coins extrêmes
+            # ==========================================
+            for bx, by in [
+                (cx - outer_offset, cy - outer_offset), # Coin bas gauche
+                (cx + outer_offset, cy - outer_offset), # Coin bas droite
+                (cx - outer_offset, cy + outer_offset), # Coin haut gauche
+                (cx + outer_offset, cy + outer_offset)  # Coin haut droite
+            ]:
+                c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
+                lp = gmsh.model.occ.addCurveLoop([c])
+                cool_circles.append(c)
+                cool_loops.append(lp)
+                cooling_positions.append((bx, by))
+            # ==========================================
 
     # Surface eau = rectangle - trous crayons - trous barres
     surface = gmsh.model.occ.addPlaneSurface([outer_loop] + rod_loops + cool_loops)
