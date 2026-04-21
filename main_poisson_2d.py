@@ -26,7 +26,7 @@ def main(order=1):
     cooling = True     # activer/désactiver les barres
 
     # --- Maillage ---
-    mesh_refinement     = 1.0       # >1 = plus fin, <1 = plus grossier
+    mesh_refinement     = 0.3       # >1 = plus fin, <1 = plus grossier
     smin_val            = 0.5e-3 / mesh_refinement  # taille min des éléments [m]
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
