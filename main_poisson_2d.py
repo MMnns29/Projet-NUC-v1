@@ -36,7 +36,7 @@ def main(order=1):
     theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
     dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
     t_end   = 67        # durée totale [s]
-    q0      = 5e3       # flux initial sur les crayons [W/m²]
+    q0      = 34000     # flux initial sur les crayons [W/m²] environ 6.5% (on est à l'arrêt) du flux termique moyen nominal : 523000 W/m²
     lam     = 1/80.0    # constante décroissance exponentielle [1/s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
     H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
@@ -81,7 +81,8 @@ def main(order=1):
     # Jacobiens de la transformation élément référence → physique
     jac, det, coords = get_jacobians(elemType, xi)
 
-    # K géométrique : kappa=1 car le vrai k(T) est appliqué dans solve_diffusion via k_of_T
+
+    # K géométrique : kappa=1 car le vrai k(T) est appliqué dans solve_diffusion via k_eff
     K_lil, _ = assemble_stiffness_and_rhs(elemTags, elemNodeTags, jac, det, coords, w, N, gN, lambda x: 1.0, lambda x: 0.0, tag_to_dof)
     # Matrice de masse M pour le terme en dU/dt
     M_lil = assemble_mass(elemTags, elemNodeTags, det, w, N, tag_to_dof)
@@ -96,13 +97,8 @@ def main(order=1):
     # ============================================================
 
     # Précalcul des propriétés de l'eau sur grille T à pression constante
-    lut = build_water_lookup_table(T_min_K=T_lut_min, T_max_K=T_lut_max, n_points=n_lut, P_MPa=P_MPa)    
-    #props0 = water_props_at(T0_K, lut)  # propriétés à la température initiale
-    #rho_val = props0["rho"]  # densité supposée constante (hypothèse rho cste)
-    #cp_val  = props0["cp"]   # capacité thermique supposée constante (idem)
-    #print(f"[E4] À T={T0_K}K : rho={rho_val:.1f} kg/m³, cp={cp_val:.1f} J/kgK, k={props0['k']:.4f} W/mK")
-    rho_fun = lambda U: water_props_at(float(np.mean(U)), lut)["rho"]
-    cp_fun  = lambda U: water_props_at(float(np.mean(U)), lut)["cp"]
+    lut = build_water_lookup_table(T_min_K=T_lut_min, T_max_K=T_lut_max, n_points=n_lut, P_MPa=P_MPa)
+
 
     # ============================================================
     # ETAPE 5 : TERMES SOURCE — CRAYONS ET BARRES
@@ -115,8 +111,6 @@ def main(order=1):
     # Flux Neumann sur les crayons : q(t) = q0 * exp(-lam*t), assemblé en vecteur nodal
     def rod_rhs(t, U): return build_neumann_vector(num_dofs, rod_data, exponential_flux(t, q0, lam), tag_to_dof)
 
-    # Conductivité non linéaire : interpolation IAPWS à T_mean clippée dans [400, 617] K
-    def k_of_T(U): return water_props_at(float(np.clip(np.mean(U), 400.0, 617.0)), lut)["k"]
 
     if cooling:
         # Récupération des segments 1D des barres de refroidissement (tag 30)
@@ -128,14 +122,13 @@ def main(order=1):
         # Condition de Robin : h(T)*(T - T_ext) implicite via matrice R et vecteur G
         def cooling_robin(t, U):
             return cooling_robin_terms(U, num_dofs, cooling_data, cooling_dofs,
-                                    T_ext, H_bar, lut, tag_to_dof)    
+                                    T_ext, H_bar, lut, tag_to_dof)
     else:
         cooling_dofs = np.array([], dtype=int)
         def cooling_robin(t, U):
             return None, np.zeros(num_dofs)
 
-    # rhs_extra : uniquement les crayons (Neumann pur)
-    # robin_extra : barres de refroidissement (Robin implicite)
+
     def combined_rhs(t, U): return rod_rhs(t, U)
 
     # ============================================================
@@ -146,8 +139,13 @@ def main(order=1):
     frames = []
     def collect_frame(step, t, U): frames.append((t, U.copy()))  # stockage pour animation
 
-    # Résolution : M*dU/dt + (k(U)*K + R(U))*U = F + G  par schéma θ + Picard
-    U = solve_diffusion(M, K, U0, rho_fun, cp_fun, k_of_T, dt, t_end, theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin, print_every=10, label="SIM", plot_callback=collect_frame)
+
+    # Résolution : M*dU/dt + (k_eff(U)*K + R(U))*U = F + G  par schéma θ + Picard
+    U = solve_diffusion(M, K, U0, lut, T_ext, pitch_val, dt, t_end,
+                        theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin,
+                        print_every=10, label="SIM", plot_callback=collect_frame)
+
+
     # ============================================================
     # ETAPE 7 : ANIMATION
     # ============================================================
@@ -158,10 +156,8 @@ def main(order=1):
     interior_mask[cooling_dofs] = False
     T_global_min = min(np.min(U_i[interior_mask]) for _, U_i in frames)
     T_global_max = max(np.max(U_i[interior_mask]) for _, U_i in frames)
-    #T_global_min = min(np.min(U_i) for _, U_i in frames)
-    #T_global_max = max(np.max(U_i) for _, U_i in frames)
     T_global_min_C = np.floor((T_global_min - 273.15) / 5) * 5   # pour avoir en °C et arrondit à 5°C en dessous pour une échelle propre (on arrondit pas les résultats hein)
-    T_global_max_C = np.ceil((T_global_max - 273.15) / 5) * 5    
+    T_global_max_C = np.ceil((T_global_max - 273.15) / 5) * 5
     print(f"[E7] Echelle T (hors barres) : {T_global_min:.1f} — {T_global_max:.1f} K")
 
     from matplotlib.animation import FuncAnimation
@@ -173,8 +169,8 @@ def main(order=1):
         if cbar_anim[0] is not None:
             cbar_anim[0].remove()
         ax_anim.clear()
-        contour = plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U_i - 273.15, tag_to_dof, show_mesh=False, ax=ax_anim, cooling_rods=cooling_positions, R_cooling=R_cooling_val, add_colorbar=False, vmin=T_global_min_C, vmax=T_global_max_C, cmap='jet')        
-        ticks = np.arange(T_global_min_C, T_global_max_C + 5, 5)#astuce pour avoir une belle échelle avec des chiffres ronds
+        contour = plot_fe_solution_2d(elemNodeTags, nodeCoords, nodeTags, U_i - 273.15, tag_to_dof, show_mesh=False, ax=ax_anim, cooling_rods=cooling_positions, R_cooling=R_cooling_val, add_colorbar=False, vmin=T_global_min_C, vmax=T_global_max_C, cmap='jet')
+        ticks = np.arange(T_global_min_C, T_global_max_C + 5, 5)  # astuce pour avoir une belle échelle avec des chiffres ronds
         cbar_anim[0] = fig_anim.colorbar(contour, ax=ax_anim, label="Temperature [°C]", ticks=ticks)
         ax_anim.set_title(f"t = {t_i:.1f} s  |  Tmax = {np.max(U_i) - 273.15:.1f} °C")
         ax_anim.set_aspect('equal')
