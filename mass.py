@@ -2,12 +2,10 @@
 #nouveauté par rapport au code ape4 : permet de sauter les trucs vides de gmsh
 #l'ancien code supposait que le 47eme tag était 46, alors que gmsh fait parfois des points
 #qui disparaissent à la fin quand on fait les crayons vides etc donc possible qu'il manque des indices
-#le nouveau code 
 
 #Le nouveau code des profs introduit tag_to_dof, exactement comme dans stiffness.py. 
 #Ce tableau fait la conversion propre entre l'identifiant brut Gmsh 
 #et un indice compact (0, 1, 2, 3...) pour la matrice
-
 
 import numpy as np
 from scipy.sparse import lil_matrix

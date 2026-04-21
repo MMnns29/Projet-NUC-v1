@@ -5,7 +5,7 @@ import os
 
 from gmsh_utils import (border_dofs_from_tags, gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5)
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
-from physics import build_water_lookup_table, water_props_at, solve_diffusion, compute_h_bar, cooling_robin_terms, exponential_flux
+from physics import build_water_lookup_table, solve_diffusion, cooling_robin_terms, exponential_flux
 from mass import assemble_mass
 from plot_utils import plot_mesh_2d, plot_fe_solution_2d
 
@@ -82,8 +82,8 @@ def main(order=1):
     jac, det, coords = get_jacobians(elemType, xi)
 
 
-    # K géométrique : kappa=1 car le vrai k(T) est appliqué dans solve_diffusion via k_eff
-    K_lil, _ = assemble_stiffness_and_rhs(elemTags, elemNodeTags, jac, det, coords, w, N, gN, lambda x: 1.0, lambda x: 0.0, tag_to_dof)
+    # K géométrique : kappa=1 car le vrai k_eff est appliqué dans solve_diffusion via k_eff
+    K_lil = assemble_stiffness_and_rhs(elemTags, elemNodeTags, jac, det, coords, w, N, gN, lambda x: 1.0, tag_to_dof)
     # Matrice de masse M pour le terme en dU/dt
     M_lil = assemble_mass(elemTags, elemNodeTags, det, w, N, tag_to_dof)
     K = K_lil.tocsr()  # format CSR pour spsolve
@@ -99,7 +99,6 @@ def main(order=1):
     # Précalcul des propriétés de l'eau sur grille T à pression constante
     lut = build_water_lookup_table(T_min_K=T_lut_min, T_max_K=T_lut_max, n_points=n_lut, P_MPa=P_MPa)
 
-
     # ============================================================
     # ETAPE 5 : TERMES SOURCE — CRAYONS ET BARRES
     # ============================================================
@@ -110,7 +109,6 @@ def main(order=1):
 
     # Flux Neumann sur les crayons : q(t) = q0 * exp(-lam*t), assemblé en vecteur nodal
     def rod_rhs(t, U): return build_neumann_vector(num_dofs, rod_data, exponential_flux(t, q0, lam), tag_to_dof)
-
 
     if cooling:
         # Récupération des segments 1D des barres de refroidissement (tag 30)

@@ -7,12 +7,12 @@ from scipy.sparse import lil_matrix
 # ASSEMBLAGE MATRICE DE RAIDEUR ET VECTEUR CHARGE
 # ===============================================
 
-def assemble_stiffness_and_rhs(elemTags, conn, jac, det, xphys, w, N, gN, kappa_fun, rhs_fun, tag_to_dof):
+def assemble_stiffness_and_rhs(elemTags, conn, jac, det, xphys, w, N, gN, kappa_fun, tag_to_dof):
     """
-    Assemble K et F pour : -div(kappa * grad(u)) = f
+    Assemble K pour : -div(kappa * grad(u)) = 0
       K_ij = int kappa * grad(N_i) . grad(N_j) dx
-      F_i  = int f * N_i dx
-    Les gradients gmsh sont en coords de reference, on remonte en coords physiques via inv(J).
+    Les gradients gmsh sont en coord de reference, on remonte en coords physiques via inv(J).
+    Le code était à la base prévu 
     """
 
     # ===============================================
@@ -32,10 +32,9 @@ def assemble_stiffness_and_rhs(elemTags, conn, jac, det, xphys, w, N, gN, kappa_
     gN    = np.asarray(gN,    dtype=np.float64).reshape(ngp, nloc, 3)       # gradients des fonctions de forme (coords reference)
 
     # ===============================================
-    # ETAPE 2 : initialisation K et F globaux
+    # ETAPE 2 : initialisation K global
     # ===============================================
     K = lil_matrix((nn, nn), dtype=np.float64)   # lil_matrix : format efficace pour l'assemblage incremental
-    F = np.zeros(nn, dtype=np.float64)
 
     # ===============================================
     # ETAPE 3 : boucle d'assemblage element par element
@@ -50,14 +49,10 @@ def assemble_stiffness_and_rhs(elemTags, conn, jac, det, xphys, w, N, gN, kappa_
             invJ  = np.linalg.inv(jac[e, g])   # jacobien inverse : sert a transformer les gradients reference -> physique
 
             kappa_g = float(kappa_fun(xg))     # conductivite thermique au pt de Gauss [W/(m*K)]
-            f_g     = float(rhs_fun(xg))       # terme source volumique au pt de Gauss [W/m^3]
 
             for a in range(nloc):
                 Ia     = int(dof_indices[a])
                 gradNa = invJ @ gN[g, a]       # gradient physique de N_a : invJ * grad_ref(N_a)
-
-                # contribution au vecteur charge : int f * N_a dx
-                F[Ia] += wg * f_g * N[g, a] * detg
 
                 for b in range(nloc):
                     Ib     = int(dof_indices[b])
@@ -66,49 +61,11 @@ def assemble_stiffness_and_rhs(elemTags, conn, jac, det, xphys, w, N, gN, kappa_
                     # contribution a la matrice de raideur : int kappa * grad(N_a) . grad(N_b) dx
                     K[Ia, Ib] += wg * kappa_g * float(np.dot(gradNa, gradNb)) * detg
 
-    return K, F
+    return K
 
 
-# ===============================================
-# ASSEMBLAGE VECTEUR NEUMANN (CONDITIONS AUX LIMITES)
-# ===============================================
-
-def assemble_rhs_neumann(F, elemTags, conn, jac, det, xphys, w, N, gN, g_neu_fun, tag_to_dof):
-    """
-    Ajoute la contribution Neumann a F :
-      F_i += int_{bord} g_neu * N_i ds
-    g_neu_fun peut etre une fonction de x ou une valeur scalaire uniforme.
-    jac et gN sont inutiles ici (pas de terme de diffusion sur le bord) et sont ignores.
-    """
-    ne   = len(elemTags)
-    ngp  = len(w)
-    nloc = int(len(conn) // ne)   # noeuds par element de bord (2 pour P1, 3 pour P2, ...)
-
-    # reshape — jac et gN non utilises ici
-    det   = np.asarray(det,   dtype=np.float64).reshape(ne, ngp)
-    xphys = np.asarray(xphys, dtype=np.float64).reshape(ne, ngp, 3)
-    conn  = np.asarray(conn,  dtype=np.int64  ).reshape(ne, nloc)
-    N     = np.asarray(N,     dtype=np.float64).reshape(ngp, nloc)
-
-    for e in range(ne):
-        dof_indices = tag_to_dof[conn[e, :]]   # dofs des noeuds de l'element de bord e
-
-        for g in range(ngp):
-            xg    = xphys[e, g]
-            wg    = w[g]
-            detg  = det[e, g]   # det du jacobien 1D : longueur de l'arete ramenee a l'element reference
-
-            # flux Neumann au point de Gauss (scalaire ou fonction spatiale)
-            g_neu_g = float(g_neu_fun(xg)) if callable(g_neu_fun) else float(g_neu_fun)
-
-            for a in range(nloc):
-                Ia = int(dof_indices[a])
-                # repartition du flux sur les noeuds via les fonctions de forme : int g_neu * N_a ds
-                F[Ia] += wg * g_neu_g * N[g, a] * detg
-
-    return F
-
-
+# Construit le vecteur Neumann F_i = int_Gamma q * N_i ds (si on a un cooling actif)
+# indépendante (flux crayons). Peut être appelée plusieurs fois et additionnée.
 def build_neumann_vector(num_dofs, boundary_data, flux_value, tag_to_dof):
     """
     Vecteur Neumann : F_i = int_{Gamma} flux_value * phi_i ds
@@ -133,7 +90,8 @@ def build_neumann_vector(num_dofs, boundary_data, flux_value, tag_to_dof):
                 F[Ia] += wg * flux_value * N_r[g, a] * detg
     return F
 
-
+# Construit la matrice Robin R_ij = int_Gamma h * N_i * N_j ds
+# Et aussi le vecteur source G_i = int_Gamma h * T_ext * N_i ds. R s'ajoute à K dans le système, G au second membre.
 def build_robin_system(num_dofs, boundary_data, alpha, g_R, tag_to_dof):
     """
     Condition de Robin : alpha*u + k*dn(u) = alpha*g_R sur Gamma_R
