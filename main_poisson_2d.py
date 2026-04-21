@@ -5,7 +5,7 @@ import os
 
 from gmsh_utils import (border_dofs_from_tags, gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5)
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
-from physics import build_water_lookup_table, solve_diffusion, cooling_robin_terms, exponential_flux
+from physics import build_water_lookup_table, solve_diffusion, solve_diffusion2, cooling_robin_terms, exponential_flux
 from mass import assemble_mass
 from plot_utils import plot_mesh_2d, plot_fe_solution_2d
 
@@ -15,7 +15,7 @@ def main(order=1):
     # ============================================================
     # PARAMÈTRES CENTRALISÉS
     # ============================================================
-
+    Res = 0 # if =0 Resolution Fast avec PIcard else : Resolution avec fsolve
     # --- Géométrie ---
     m_val               = 3         # crayons par rangée par assemblage (≥2 si cooling)
     n_val               = 1         # assemblages (1, 4 ou 9)
@@ -26,7 +26,7 @@ def main(order=1):
     cooling = True     # activer/désactiver les barres
 
     # --- Maillage ---
-    mesh_refinement     = 1.0       # >1 = plus fin, <1 = plus grossier
+    mesh_refinement     = 0.3       # >1 = plus fin, <1 = plus grossier
     smin_val            = 0.5e-3 / mesh_refinement  # taille min des éléments [m]
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
@@ -45,7 +45,6 @@ def main(order=1):
     T_lut_min   = 400.0   # borne basse LUT [K] — aussi utilisée comme garde thermique
     T_lut_max   = 650.0   # borne haute LUT [K]
     n_lut       = 250     # points de la grille LUT (precision vs vitesse)
-
     # ============================================================
     # ETAPE 1 : MAILLAGE
     # ============================================================
@@ -139,9 +138,15 @@ def main(order=1):
 
 
     # Résolution : M*dU/dt + (k_eff(U)*K + R(U))*U = F + G  par schéma θ + Picard
-    U = solve_diffusion(M, K, U0, lut, T_ext, pitch_val, dt, t_end,
-                        theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin,
-                        print_every=10, label="SIM", plot_callback=collect_frame)
+    if Res == 0:
+        U = solve_diffusion(M, K, U0, lut, T_ext, pitch_val, dt, t_end,
+                            theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin,
+                            print_every=10, label="SIM", plot_callback=collect_frame)
+    else :
+        U = solve_diffusion2(M, K, U0, lut, T_ext, pitch_val, dt, t_end,
+                            theta=theta, rhs_extra=combined_rhs, robin_extra=cooling_robin,
+                            print_every=10, label="SIM", plot_callback=collect_frame)
+        
 
 
     # ============================================================

@@ -2,7 +2,7 @@ import numpy as np
 from iapws import IAPWS97
 from scipy.sparse.linalg import spsolve
 from stiffness import build_robin_system
-
+from scipy.optimize import fsolve
 
 # ===============================================
 # LOOKUP TABLE — PROPRIETES THERMOPHYSIQUES EAU
@@ -70,48 +70,142 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
     n_steps = int(t_end / dt)
 
     print(f"[{label}] Demarrage boucle temporelle...")
+    print(f"[{label}] VRAI DÉPART (t=initial) : Tmin={np.min(U0):.2f} K, Tmax={np.max(U0):.2f} K")
+    for step in range(n_steps):
+        t = step * dt
+        V = U.copy() # Initial guess pour le pas n+1
+
+        for it in range(nl_maxiter):
+            # --- ON RECALCULE TOUT AVEC LA DERNIÈRE ESTIMATION V ---
+            K_phys   = get_k_eff(V) * K
+            M_phys_V = get_M_phys(V)
+            
+            R_robin, G_robin = 0, np.zeros_like(U)
+            if robin_extra is not None:
+                R_robin, G_robin = robin_extra(t + dt, V) # Mise à jour Robin avec V
+
+            K_total = K_phys + R_robin
+            
+            # Matrice A(V) et Vecteur B(U)
+            # Note : B dépend de U (temps n) mais A dépend de V (itération courante)
+            A = (M_phys_V + theta * dt * K_total).tocsr()
+            
+            # Calcul du second membre B (basé sur le pas précédent U)
+            # Attention : M_phys_cur doit être celui du temps n (U)
+            M_phys_n = get_M_phys(U)
+            B = (M_phys_n - (1 - theta) * dt * K_total).dot(U) + dt * G_robin
+            if rhs_extra is not None:
+                B += dt * rhs_extra(t, U)
+
+            # --- RÉSOLUTION ---
+            R_v = A.dot(V) - B
+            res = np.linalg.norm(R_v)
+            
+            if res < nl_tol:
+                break
+            
+            V = spsolve(A, B) # Version simplifiée du point fixe
+        
+        U = V # On valide le pas de temps
+
+        # ---- gardes thermiques ----      
+        if np.min(U) < 400.0:
+            print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.1f} K < 400 K")
+        if float(np.mean(U)) < 500.0:
+            print(f"[{label}] t={t:.1f}s : eau suffisamment refroidie, arret")
+            break
+        if np.max(U) > 618.0:
+            print(f"[{label}] WARN : Tmax={np.max(U):.1f} K > Tsat, arret")
+            break
+        if plot_callback is not None:
+            plot_callback(step, t, U)
+        if step % print_every == 0:
+            print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.2f} K, Tmax={np.max(U):.2f} K")
+
+    print(f"[{label}] Boucle terminee.")
+    return U
+
+# ===============================================
+# SOLVEUR TEMPOREL — SCHEMA THETA AVEC FSOLVE
+# ===============================================
+
+def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
+                    theta=1.0, rhs_extra=None, robin_extra=None,
+                    nl_tol=1e-6, nl_maxiter=20, # Conservés pour la signature
+                    print_every=10, label="", plot_callback=None):
+
+    def get_M_phys(V):
+        T = float(np.clip(np.mean(V), 400.0, 617.0))
+        props = water_props_at(T, lookup)
+        return props["rho"] * props["cp"] * M
+
+    def get_k_eff(V):
+        T = float(np.clip(np.mean(V), 400.0, 617.0))
+        props = water_props_at(T, lookup)
+        Ra = 9.81 * props["beta"] * abs(T - T_ext) * Lc**3 / (props["nu"] * props["alpha"])
+        Nu = max(1.0, 0.48 * Ra**0.25)
+        return props["k"] * Nu
+
+    U = U0.copy()
+    n_steps = int(t_end / dt)
+
+    print(f"[{label}] Demarrage boucle temporelle avec fsolve...")
+    print(f"[{label}] VRAI DÉPART (t=initial) : Tmin={np.min(U0):.2f} K, Tmax={np.max(U0):.2f} K")
     for step in range(n_steps):
         t = step * dt
 
-        # ---- termes Robin (modifient A et B simultanement) ----
-        R_robin = 0
-        G_robin = np.zeros_like(U)
+        # ---- Evaluation des termes au temps t (n) pour construire le vecteur B ----
+        K_phys_n = get_k_eff(U) * K
+        M_phys_n = get_M_phys(U)
+        
+        R_robin_n = 0
+        G_robin_n = np.zeros_like(U)
         if robin_extra is not None:
             R_mat, G_vec = robin_extra(t, U)
             if R_mat is not None:
-                R_robin = R_mat        # s'ajoute a K dans A
-                G_robin = G_vec        # s'ajoute a F dans B
+                R_robin_n = R_mat
+                G_robin_n = G_vec
 
-        # ---- construction de K_phys et M_phys ----
-        K_phys    = get_k_eff(U) * K
-        M_phys_cur = get_M_phys(U)
-
-        # ---- second membre B ----
-        # B = [M - (1-theta)*dt*(K+R)] * U^n + dt*[G + rhs_extra]
-        K_total = K_phys + R_robin    # K physique + Robin : meme traitement theta
-        B = (M_phys_cur - (1 - theta) * dt * K_total).dot(U)
-        B += dt * G_robin             # terme source Robin
+        K_total_n = K_phys_n + R_robin_n
+        
+        # Construction de B(U^n)
+        B = (M_phys_n - (1 - theta) * dt * K_total_n).dot(U)
+        B += dt * G_robin_n
         if rhs_extra is not None:
             B += dt * rhs_extra(t, U)
 
-        # ---- matrice A ----
-        A = (M_phys_cur + theta * dt * K_total).tocsr()
+        # ---- Fonction residu pour fsolve (recherche de V = U^{n+1}) ----
+        def residual(V):
+            K_phys_V = get_k_eff(V) * K
+            M_phys_V = get_M_phys(V)
+            
+            R_robin_V = 0
+            if robin_extra is not None:
+                # La matrice Robin peut dépendre de V (T à l'étape n+1)
+                R_mat, _ = robin_extra(t + dt, V)
+                if R_mat is not None:
+                    R_robin_V = R_mat
+                    
+            K_total_V = K_phys_V + R_robin_V
+            
+            # Calcul de A(V) * V
+            A_V = (M_phys_V + theta * dt * K_total_V).dot(V)
+            
+            # Residu = A(V)*V - B(U^n)
+            return A_V - B
 
-        # ---- resolution par iterations de Picard ----
-        V = U.copy()
-        for it in range(nl_maxiter):
-            R_v = A.dot(V) - B
-            res = np.linalg.norm(R_v)
-            if res < nl_tol:
-                break
-            V = V + spsolve(A, -R_v)
-        else:
-            print(f"[{label}] WARN Picard non converge step={step} |R|={res:.2e}")
-        U = V
+        # ---- Resolution non-linéaire ----
+        # U est fourni comme point de départ (guess initial)
+        V_sol, info, ier, mesg = fsolve(residual, U, xtol=nl_tol, full_output=True)
+        
+        if ier != 1:
+            print(f"[{label}] WARN fsolve non converge step={step}: {mesg}")
+            
+        U = V_sol
 
         # ---- gardes thermiques ----
         if np.min(U) < 400.0:
-            print(f"[{label}] t={t:.1f}s : Tmin={np.min(U):.1f} K < 400 K")
+            print(f"[{label}] t={(t+5):.1f}s : Tmin={np.min(U):.1f} K < 400 K")
         if float(np.mean(U)) < 500.0:
             print(f"[{label}] t={t:.1f}s : eau suffisamment refroidie, arret")
             break
@@ -126,7 +220,6 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
 
     print(f"[{label}] Boucle terminee.")
     return U
-
 # ===============================================
 # FLUX RESIDUEL POST-ARRET REACTEUR
 # ===============================================
