@@ -31,14 +31,14 @@ def main(order=1):
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
     # --- Physique ---
-    t_insert_val = 0.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
+    t_insert_val = 10.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
     T0_K    = 553.15    # température initiale [K] (~280°C, REP nominal)
     P_MPa   = 15.5      # pression [MPa] = 155 bars
     theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
     dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
-    t_end   = 120        # durée totale [s]
+    t_end   = 60        # durée totale [s]
     q0      = 34000     # flux initial sur les crayons [W/m²] environ 6.5% (on est à l'arrêt) du flux termique moyen nominal : 523000 W/m²
-    lam     = 1/200.0    # constante décroissance exponentielle [1/s]
+    lam     = 1/800    # constante décroissance exponentielle [1/s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
     H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
 

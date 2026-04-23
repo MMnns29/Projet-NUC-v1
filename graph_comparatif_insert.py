@@ -11,7 +11,7 @@ def generate_comparative_plot():
     # ============================================================
     # PARAMÈTRES (Identiques à ton main)
     # ============================================================
-    m_val = 3 
+    m_val = 8 
     n_val =  1
     pitch_val = 18.7e-3
     R_rod_val = 6.15e-3
@@ -23,7 +23,7 @@ def generate_comparative_plot():
     P_MPa = 15.5
     theta = 1.0
     dt = 0.5
-    t_end = 120.0  # Mis à 120s pour bien voir le cas t_insert=90s
+    t_end = 20.0  # Mis à 120s pour bien voir le cas t_insert=90s
     q0 = 34000     
     lam = 1/80.0
     T_ext = 500.0
@@ -65,7 +65,7 @@ def generate_comparative_plot():
     # BOUCLE SUR LES DIFFERENTS TEMPS D'INSERTION
     # ============================================================
     # On ajoute None pour le cas "Sans barres / False"
-    scenarios = [0.0, 10.0, 30.0, 60.0, 90.0, None] 
+    scenarios = [0.0, 1.0, 5.0, 10.0, 15.0, None] 
     results = {}
 
     for t_ins in scenarios:
@@ -108,10 +108,10 @@ def generate_comparative_plot():
     # Couleurs et styles pour chaque courbe
     styles = {
         0.0: {'color': 'blue', 'label': 'Activation immédiate (0s)', 'ls': '-'},
-        10.0: {'color': 'cyan', 'label': 'Retard de 10s', 'ls': '-'},
-        30.0: {'color': 'green', 'label': 'Retard de 30s', 'ls': '-'},
-        60.0: {'color': 'orange', 'label': 'Retard de 60s', 'ls': '-'},
-        90.0: {'color': 'purple', 'label': 'Retard de 90s', 'ls': '-'},
+        1.0: {'color': 'cyan', 'label': 'Retard de 10s', 'ls': '-'},
+        5.0: {'color': 'green', 'label': 'Retard de 30s', 'ls': '-'},
+        10.0: {'color': 'orange', 'label': 'Retard de 60s', 'ls': '-'},
+        15.0: {'color': 'purple', 'label': 'Retard de 90s', 'ls': '-'},
         None: {'color': 'red', 'label': 'Sans refroidissement (Défaillance)', 'ls': '--'}
     }
 
@@ -125,7 +125,7 @@ def generate_comparative_plot():
 
     plt.xlabel("Temps écoulé depuis l'arrêt [s]", fontsize=13)
     plt.ylabel("Température maximale $T_{max}$ [°C]", fontsize=13)
-    plt.title("Analyse de sensibilité : Impact du délai d'activation du refroidissement passif", fontsize=15)
+    plt.title("Impact du délai d'activation du refroidissement passif", fontsize=15)
     plt.legend(loc='lower right', fontsize=11, framealpha=0.9)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()

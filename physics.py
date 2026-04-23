@@ -55,16 +55,27 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
                     print_every=10, label="", plot_callback=None):
 
     def get_M_phys(V):
+        # On utilise np.min pour isoler la vraie inertie de l'eau bulk
         T = float(np.clip(np.mean(V), 400.0, 617.0))
         props = water_props_at(T, lookup)
         return props["rho"] * props["cp"] * M
 
-    def get_k_eff(V):
-        T = float(np.clip(np.mean(V), 400.0, 617.0))
-        props = water_props_at(T, lookup)
-        Ra = 9.81 * props["beta"] * abs(T - T_ext) * Lc**3 / (props["nu"] * props["alpha"])
-        Nu = max(1.0, 0.48 * Ra**0.25)
-        return props["k"] * Nu
+    def get_k_eff(V, active_cooling):
+            T_moy = float(np.clip(np.mean(V), 400.0, 617.0))
+            T_max = float(np.clip(np.max(V),  400.0, 617.0))
+            T_min = float(np.clip(np.min(V),  400.0, 617.0))
+            props = water_props_at(T_moy, lookup)
+            
+
+
+            dT_local = abs(T_max - T_min)
+            if dT_local < 0.1:
+                return props["k"]
+                               # ← maintenant props existe
+            
+            Ra = 9.81 * props["beta"] * dT_local * Lc**3 / (props["nu"] * props["alpha"])
+            Nu = max(1.0, 0.48 * Ra**0.25)
+            return props["k"] * Nu
 
     U = U0.copy()
     n_steps = int(t_end / dt)
@@ -76,22 +87,25 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
         V = U.copy() # Initial guess pour le pas n+1
 
         for it in range(nl_maxiter):
-            # --- ON RECALCULE TOUT AVEC LA DERNIÈRE ESTIMATION V ---
-            K_phys   = get_k_eff(V) * K
-            M_phys_V = get_M_phys(V)
-            
+            # --- 1. EVALUATION DE LA CONDITION DE ROBIN ---
             R_robin, G_robin = 0, np.zeros_like(U)
+            active_cooling = False
+            
             if robin_extra is not None:
                 R_robin, G_robin = robin_extra(t + dt, V) # Mise à jour Robin avec V
+                # Si R_robin n'est pas "0", le refroidissement est actif
+                if not (isinstance(R_robin, (int, float)) and R_robin == 0):
+                    active_cooling = True
 
+            # --- 2. CALCUL DES PROPRIÉTÉS AVEC L'ÉTAT DU REFROIDISSEMENT ---
+            K_phys   = get_k_eff(V, active_cooling) * K
+            M_phys_V = get_M_phys(V)
+            
             K_total = K_phys + R_robin
             
             # Matrice A(V) et Vecteur B(U)
-            # Note : B dépend de U (temps n) mais A dépend de V (itération courante)
             A = (M_phys_V + theta * dt * K_total).tocsr()
             
-            # Calcul du second membre B (basé sur le pas précédent U)
-            # Attention : M_phys_cur doit être celui du temps n (U)
             M_phys_n = get_M_phys(U)
             B = (M_phys_n - (1 - theta) * dt * K_total).dot(U) + dt * G_robin
             if rhs_extra is not None:
@@ -135,13 +149,17 @@ def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
                     print_every=10, label="", plot_callback=None):
 
     def get_M_phys(V):
-        T = float(np.clip(np.mean(V), 400.0, 617.0))
+        T = float(np.clip(np.miean(V), 400.0, 617.0))
         props = water_props_at(T, lookup)
         return props["rho"] * props["cp"] * M
 
-    def get_k_eff(V):
+    def get_k_eff(V, active_cooling):
         T = float(np.clip(np.mean(V), 400.0, 617.0))
         props = water_props_at(T, lookup)
+        
+        if not active_cooling:
+            return props["k"] * 1.0
+            
         Ra = 9.81 * props["beta"] * abs(T - T_ext) * Lc**3 / (props["nu"] * props["alpha"])
         Nu = max(1.0, 0.48 * Ra**0.25)
         return props["k"] * Nu
@@ -155,17 +173,20 @@ def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
         t = step * dt
 
         # ---- Evaluation des termes au temps t (n) pour construire le vecteur B ----
-        K_phys_n = get_k_eff(U) * K
-        M_phys_n = get_M_phys(U)
-        
         R_robin_n = 0
         G_robin_n = np.zeros_like(U)
+        active_cooling_n = False
+        
         if robin_extra is not None:
             R_mat, G_vec = robin_extra(t, U)
-            if R_mat is not None:
+            if R_mat is not None and not (isinstance(R_mat, (int, float)) and R_mat == 0):
                 R_robin_n = R_mat
                 G_robin_n = G_vec
+                active_cooling_n = True
 
+        K_phys_n = get_k_eff(U, active_cooling_n) * K
+        M_phys_n = get_M_phys(U)
+        
         K_total_n = K_phys_n + R_robin_n
         
         # Construction de B(U^n)
@@ -176,16 +197,18 @@ def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
 
         # ---- Fonction residu pour fsolve (recherche de V = U^{n+1}) ----
         def residual(V):
-            K_phys_V = get_k_eff(V) * K
+            R_robin_V = 0
+            active_cooling_V = False
+
+            if robin_extra is not None:
+                R_mat, _ = robin_extra(t + dt, V)
+                if R_mat is not None and not (isinstance(R_mat, (int, float)) and R_mat == 0):
+                    R_robin_V = R_mat
+                    active_cooling_V = True
+            
+            K_phys_V = get_k_eff(V, active_cooling_V) * K
             M_phys_V = get_M_phys(V)
             
-            R_robin_V = 0
-            if robin_extra is not None:
-                # La matrice Robin peut dépendre de V (T à l'étape n+1)
-                R_mat, _ = robin_extra(t + dt, V)
-                if R_mat is not None:
-                    R_robin_V = R_mat
-                    
             K_total_V = K_phys_V + R_robin_V
             
             # Calcul de A(V) * V
@@ -224,7 +247,7 @@ def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
 # FLUX RESIDUEL POST-ARRET REACTEUR
 # ===============================================
 
-def exponential_flux(t, q0, lam): #à remettre dans le main peut être 
+def exponential_flux(t, q0, lam):
     """
     Puissance residuelle decroissante apres arret reacteur (modele simplifie).
     q0  : flux initial [W/m^2]
