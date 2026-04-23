@@ -5,7 +5,7 @@ import os
 
 from gmsh_utils import (border_dofs_from_tags, gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5)
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
-from physics import build_water_lookup_table, solve_diffusion, solve_diffusion2, cooling_robin_terms, exponential_flux
+from physics import build_water_lookup_table, solve_diffusion, solve_diffusion2, cooling_robin_terms, way_wigner_flux
 from mass import assemble_mass
 from plot_utils import plot_mesh_2d, plot_fe_solution_2d
 
@@ -31,14 +31,12 @@ def main(order=1):
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
     # --- Physique ---
-    t_insert_val = 10.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
+    t_insert_val = 0.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
     T0_K    = 553.15    # température initiale [K] (~280°C, REP nominal)
     P_MPa   = 15.5      # pression [MPa] = 155 bars
     theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
-    dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
-    t_end   = 60        # durée totale [s]
-    q0      = 34000     # flux initial sur les crayons [W/m²] environ 6.5% (on est à l'arrêt) du flux termique moyen nominal : 523000 W/m²
-    lam     = 1/8000    # constante décroissance exponentielle [1/s]
+    dt      = 25       # pas de temps [s] (ça fait x2 je sais pas pq)
+    t_end   = 2000        # durée totale [s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
     H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
 
@@ -100,8 +98,11 @@ def main(order=1):
     rod_data = get_boundary_segments(physical_tag=20, order=order)
     print(f"[E5] {len(rod_data[1])} segments sur les crayons")
 
-    def rod_rhs(t, U): return build_neumann_vector(num_dofs, rod_data, exponential_flux(t, q0, lam), tag_to_dof)
-
+# Remplace rod_rhs par ceci :
+    q_nom_fonctionnement = 523000.0 
+    
+    def rod_rhs(t, U): 
+        return build_neumann_vector(num_dofs, rod_data, way_wigner_flux(t, q_nom_fonctionnement), tag_to_dof)
     if cooling:
         cooling_data = get_boundary_segments(physical_tag=30, order=order)
         print(f"[E5] {len(cooling_data[1])} segments sur les barres de refroidissement")
@@ -125,7 +126,7 @@ def main(order=1):
 
     U0 = np.full(num_dofs, T0_K)  
 
-    # --- AJOUT POUR LES GRAPHIQUES ---
+# --- AJOUT POUR LES GRAPHIQUES ---
     vec_ones = np.ones(num_dofs)
     M_ones = M.dot(vec_ones)
     total_area = np.sum(M_ones)
@@ -133,13 +134,15 @@ def main(order=1):
     frames = []
     time_list = []
     T_max_list = []
+    T_min_list = [] # <--- NOUVEAU
     T_avg_list = []
 
     def collect_frame(step, t, U): 
         frames.append((t, U.copy()))  
         time_list.append(t)
         T_max_list.append(np.max(U))
-        T_avg_list.append(np.dot(M_ones, U) / total_area) # Moyenne spatiale exacte via éléments finis
+        T_min_list.append(np.min(U)) # <--- NOUVEAU
+        T_avg_list.append(np.dot(M_ones, U) / total_area)
     # ---------------------------------
 
     if Res == 0:
@@ -153,29 +156,39 @@ def main(order=1):
         
 
 # ============================================================
-    # ETAPE 6.5 : GENERATION DU GRAPHIQUE D'EVOLUTION
+    # ETAPE 6.5 : GENERATION DU GRAPHIQUE D'EVOLUTION (STYLISÉ)
     # ============================================================
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(11, 7))
 
-    # --- NOUVEAU : Conversion en Celsius ---
+    # --- Conversion en Celsius ---
     T_max_C = np.array(T_max_list) - 273.15
     T_avg_C = np.array(T_avg_list) - 273.15
+    T_min_C = np.array(T_min_list) - 273.15 # <--- NOUVEAU
 
-    # Tracé avec les valeurs en Celsius
-    plt.plot(time_list, T_max_C, label="Température Maximale ($T_{max}$)", color='red', lw=2)
-    plt.plot(time_list, T_avg_C, label="Température Moyenne ($T_{moy}$)", color='blue', lw=2, linestyle='--')
+    # Tracé des courbes de simulation
+    plt.plot(time_list, T_max_C, label="Température Maximale ($T_{max}$)", color='darkorange', lw=2.5)
+    plt.plot(time_list, T_avg_C, label="Température Moyenne ($T_{moy}$)", color='royalblue', lw=2, linestyle='--')
+    plt.plot(time_list, T_min_C, label="Température Minimale ($T_{min}$)", color='seagreen', lw=1.5, alpha=0.8)
     
-    # Ligne d'ébullition corrigée (618 K - 273.15 = 344.85 °C)
-    plt.axhline(y=344.85, color='black', linestyle=':', label="Limite d'ébullition (~345 °C)")
+    # Ligne d'ébullition "EFFRAYANTE"
+    # color='red', linewidth=4 et zorder élevé pour qu'elle passe au-dessus de tout
+    plt.axhline(y=344.85, color='red', linestyle='-', linewidth=2, label="Limite d'ébullition ~345°C", zorder=10)
+
+    # Ombrage de la zone de danger (optionnel pour l'esthétique)
+    plt.fill_between(time_list, 344.85, 400, color='red', alpha=0.1)
 
     if cooling and t_insert_val > 0:
-        plt.axvline(x=t_insert_val, color='green', linestyle='-', alpha=0.5, label=f"Activation Barres (t={t_insert_val}s)")
+        plt.axvline(x=t_insert_val, color='black', linestyle='-.', alpha=0.6, label=f"Activation Barres (t={t_insert_val}s)")
 
-    plt.xlabel("Temps [s]")
-    plt.ylabel("Température [°C]") # <-- Label mis à jour
-    plt.title("Évolution des températures maximale et moyenne dans la cuve")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    plt.xlabel("Temps écoulé depuis l'arrêt [s]", fontsize=12)
+    plt.ylabel("Température mesurée [°C]", fontsize=12)
+    plt.title("Évolution Thermique en Défaillance de Refroidissement", fontsize=14, fontweight='bold')
+    
+    plt.ylim(T_min_C.min() - 5, 360) # On cadre pour bien voir la limite
+    plt.legend(loc='lower right', framealpha=0.9)
+    plt.grid(True, which='both', linestyle=':', alpha=0.5)
+    
+    plt.tight_layout()
     plt.savefig("evolution_temperatures_t_insert_False.pdf", dpi=300)
     plt.show(block=False)
     # ============================================================

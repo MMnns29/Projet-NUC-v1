@@ -4,7 +4,7 @@ import os
 
 from gmsh_utils import border_dofs_from_tags, gmsh_init, gmsh_finalize, prepare_quadrature_and_basis, get_jacobians, get_boundary_segments, mesh5
 from stiffness import assemble_stiffness_and_rhs, build_neumann_vector
-from physics import build_water_lookup_table, solve_diffusion, cooling_robin_terms, exponential_flux
+from physics import build_water_lookup_table, solve_diffusion, solve_diffusion2, cooling_robin_terms, way_wigner_flux
 from mass import assemble_mass
 
 def generate_comparative_plot():
@@ -21,9 +21,9 @@ def generate_comparative_plot():
 
     T0_K = 553.15
     P_MPa = 15.5
-    theta = 1.0
+    theta = 22.5
     dt = 0.5
-    t_end = 20.0  # Mis à 120s pour bien voir le cas t_insert=90s
+    t_end = 5400.0  # Mis à 120s pour bien voir le cas t_insert=90s
     q0 = 34000     
     lam = 1/80.0
     T_ext = 500.0
@@ -58,9 +58,10 @@ def generate_comparative_plot():
     cooling_data = get_boundary_segments(30, 1)
     cooling_dofs = border_dofs_from_tags(np.unique(cooling_data[2]), tag_to_dof)
 
+    q_nom_fonctionnement = 523000.0 
+    
     def rod_rhs(t, U): 
-        return build_neumann_vector(num_dofs, rod_data, exponential_flux(t, q0, lam), tag_to_dof)
-
+        return build_neumann_vector(num_dofs, rod_data, way_wigner_flux(t, q_nom_fonctionnement), tag_to_dof)
     # ============================================================
     # BOUCLE SUR LES DIFFERENTS TEMPS D'INSERTION
     # ============================================================
@@ -108,10 +109,10 @@ def generate_comparative_plot():
     # Couleurs et styles pour chaque courbe
     styles = {
         0.0: {'color': 'blue', 'label': 'Activation immédiate (0s)', 'ls': '-'},
-        1.0: {'color': 'cyan', 'label': 'Retard de 10s', 'ls': '-'},
-        5.0: {'color': 'green', 'label': 'Retard de 30s', 'ls': '-'},
-        10.0: {'color': 'orange', 'label': 'Retard de 60s', 'ls': '-'},
-        15.0: {'color': 'purple', 'label': 'Retard de 90s', 'ls': '-'},
+        1.0: {'color': 'cyan', 'label': 'Retard de 1s', 'ls': '-'},
+        5.0: {'color': 'green', 'label': 'Retard de 5s', 'ls': '-'},
+        10.0: {'color': 'orange', 'label': 'Retard de 10s', 'ls': '-'},
+        15.0: {'color': 'purple', 'label': 'Retard de 15s', 'ls': '-'},
         None: {'color': 'red', 'label': 'Sans refroidissement (Défaillance)', 'ls': '--'}
     }
 

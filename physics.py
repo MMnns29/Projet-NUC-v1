@@ -61,7 +61,7 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
     # FACTEUR D'INVENTAIRE VOLUMIQUE (Scale Factor 2D -> 3D)
     # Le volume d'eau du circuit primaire entier est ~85 fois plus grand que le volume 
     # de l'eau strictement maillée entre les crayons dans cette coupe 2D.
-    facteur_volume = 85.0 
+    facteur_volume = 10 
     
     # On attribue l'inertie thermique réelle du réacteur à notre maillage
     M_phys_constant = props0["rho"] * props0["cp"] * M * facteur_volume
@@ -70,6 +70,9 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
             T_moy = float(np.clip(np.mean(V), 400.0, 617.0))
             T_max = float(np.clip(np.max(V),  400.0, 617.0))
             props = water_props_at(T_moy, lookup)
+
+            #if not active_cooling:
+            #    return props["k"] * 1
             
             # Le moteur de la convection est le gradient entre le point chaud (crayon) et la moyenne
             dT_moteur = abs(T_max - T_moy)
@@ -244,17 +247,24 @@ def solve_diffusion2(M, K, U0, lookup, T_ext, Lc, dt, t_end,
 
     print(f"[{label}] Boucle terminee.")
     return U
+
 # ===============================================
-# FLUX RESIDUEL POST-ARRET REACTEUR
+# FLUX RESIDUEL POST-ARRET REACTEUR (WAY-WIGNER)
 # ===============================================
 
-def exponential_flux(t, q0, lam):
+def way_wigner_flux(t, q_nom, t_op=3.15e7):
     """
-    Puissance residuelle decroissante apres arret reacteur (modele simplifie).
-    q0  : flux initial [W/m^2]
-    lam : constante de decroissance [1/s]  (a ajuster selon le combustible)
+    Puissance résiduelle selon la formulation de Way-Wigner.
+    q_nom : Flux nominal en fonctionnement (ex: 523000 W/m^2)
+    t_op  : Temps d'opération du réacteur avant arrêt (ex: 1 an = 3.15e7 s)
     """
-    return q0 * np.exp(-lam * t)
+    # Sécurité à t=0 pour éviter la divergence (t^-0.2). 
+    # À l'instant t=0, la puissance résiduelle vaut environ ~6.5% de la puissance nominale.
+    t_safe = max(t, 1.0) 
+    
+    fraction = 0.0622 * (t_safe**(-0.2) - (t_op + t_safe)**(-0.2))
+    
+    return q_nom * fraction
 
 
 # ===============================================
