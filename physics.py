@@ -54,28 +54,34 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
                     nl_tol=1e-6, nl_maxiter=20,
                     print_every=10, label="", plot_callback=None):
 
-    def get_M_phys(V):
-        # On utilise np.min pour isoler la vraie inertie de l'eau bulk
-        T = float(np.clip(np.mean(V), 400.0, 617.0))
-        props = water_props_at(T, lookup)
-        return props["rho"] * props["cp"] * M
+    # 1. ON GÈLE LA MATRICE DE MASSE À T0 (Approximation de Boussinesq)
+    T0_avg = float(np.mean(U0))
+    props0 = water_props_at(T0_avg, lookup)
+    
+    # FACTEUR D'INVENTAIRE VOLUMIQUE (Scale Factor 2D -> 3D)
+    # Le volume d'eau du circuit primaire entier est ~85 fois plus grand que le volume 
+    # de l'eau strictement maillée entre les crayons dans cette coupe 2D.
+    facteur_volume = 85.0 
+    
+    # On attribue l'inertie thermique réelle du réacteur à notre maillage
+    M_phys_constant = props0["rho"] * props0["cp"] * M * facteur_volume
 
     def get_k_eff(V, active_cooling):
             T_moy = float(np.clip(np.mean(V), 400.0, 617.0))
             T_max = float(np.clip(np.max(V),  400.0, 617.0))
-            T_min = float(np.clip(np.min(V),  400.0, 617.0))
             props = water_props_at(T_moy, lookup)
             
-
-
-            dT_local = abs(T_max - T_min)
-            if dT_local < 0.1:
+            # Le moteur de la convection est le gradient entre le point chaud (crayon) et la moyenne
+            dT_moteur = abs(T_max - T_moy)
+            if dT_moteur < 0.1:
                 return props["k"]
-                               # ← maintenant props existe
             
-            Ra = 9.81 * props["beta"] * dT_local * Lc**3 / (props["nu"] * props["alpha"])
+            Ra = 9.81 * props["beta"] * dT_moteur * Lc**3 / (props["nu"] * props["alpha"])
+            # Correlation de Nusselt pour espace confine
             Nu = max(1.0, 0.48 * Ra**0.25)
-            return props["k"] * Nu
+            
+            # Limiteur (Cap) pour eviter que l'eau ne devienne trop conductrice dans un milieu encombre
+            return props["k"] * min(Nu, 8.0)
 
     U = U0.copy()
     n_steps = int(t_end / dt)
@@ -93,32 +99,27 @@ def solve_diffusion(M, K, U0, lookup, T_ext, Lc, dt, t_end,
             
             if robin_extra is not None:
                 R_robin, G_robin = robin_extra(t + dt, V) # Mise à jour Robin avec V
-                # Si R_robin n'est pas "0", le refroidissement est actif
                 if not (isinstance(R_robin, (int, float)) and R_robin == 0):
                     active_cooling = True
 
             # --- 2. CALCUL DES PROPRIÉTÉS AVEC L'ÉTAT DU REFROIDISSEMENT ---
             K_phys   = get_k_eff(V, active_cooling) * K
-            M_phys_V = get_M_phys(V)
-            
             K_total = K_phys + R_robin
             
-            # Matrice A(V) et Vecteur B(U)
-            A = (M_phys_V + theta * dt * K_total).tocsr()
+            # Matrice A(V) et Vecteur B(U) utilisant la matrice de masse constante
+            A = (M_phys_constant + theta * dt * K_total).tocsr()
+            B = (M_phys_constant - (1 - theta) * dt * K_total).dot(U) + dt * G_robin
             
-            M_phys_n = get_M_phys(U)
-            B = (M_phys_n - (1 - theta) * dt * K_total).dot(U) + dt * G_robin
             if rhs_extra is not None:
                 B += dt * rhs_extra(t, U)
 
             # --- RÉSOLUTION ---
-            R_v = A.dot(V) - B
-            res = np.linalg.norm(R_v)
+            V_new = spsolve(A, B)
+            res = np.linalg.norm(V_new - V)
+            V = V_new
             
             if res < nl_tol:
                 break
-            
-            V = spsolve(A, B) # Version simplifiée du point fixe
         
         U = V # On valide le pas de temps
 

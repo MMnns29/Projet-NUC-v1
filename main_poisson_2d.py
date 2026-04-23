@@ -26,7 +26,7 @@ def main(order=1):
     cooling = False     # activer/désactiver les barres
 
     # --- Maillage ---
-    mesh_refinement     = 0.3       # >1 = plus fin, <1 = plus grossier
+    mesh_refinement     = 1       # >1 = plus fin, <1 = plus grossier
     smin_val            = 0.5e-3 / mesh_refinement  # taille min des éléments [m]
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
@@ -38,7 +38,7 @@ def main(order=1):
     dt      = 0.5       # pas de temps [s] (ça fait x2 je sais pas pq)
     t_end   = 60        # durée totale [s]
     q0      = 34000     # flux initial sur les crayons [W/m²] environ 6.5% (on est à l'arrêt) du flux termique moyen nominal : 523000 W/m²
-    lam     = 1/800    # constante décroissance exponentielle [1/s]
+    lam     = 1/8000    # constante décroissance exponentielle [1/s]
     T_ext   = 500.0     # température eau froide des barres de refroidissement [K]
     H_bar   = 0.5       # hauteur effective pour corrélation Churchill-Chu [m]
 
@@ -82,6 +82,7 @@ def main(order=1):
     M_lil = assemble_mass(elemTags, elemNodeTags, det, w, N, tag_to_dof)
     K = K_lil.tocsr()  
     M = M_lil.tocsr()
+
 
     print(f"[E3] K : {K.shape}, nnz={K.nnz} | M : {M.shape}, nnz={M.nnz}")
     print(f"[E3] Diag M>0 : {np.all(M.diagonal()>0)} | Diag K>0 : {np.all(K.diagonal()>0)}")
