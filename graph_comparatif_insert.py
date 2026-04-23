@@ -22,10 +22,8 @@ def generate_comparative_plot():
     T0_K = 553.15
     P_MPa = 15.5
     theta = 22.5
-    dt = 0.5
-    t_end = 5400.0  # Mis à 120s pour bien voir le cas t_insert=90s
-    q0 = 34000     
-    lam = 1/80.0
+    dt = 15
+    t_end = 3600.0  # Mis à 120s pour bien voir le cas t_insert=90s
     T_ext = 500.0
     H_bar = 0.5
 
@@ -66,7 +64,7 @@ def generate_comparative_plot():
     # BOUCLE SUR LES DIFFERENTS TEMPS D'INSERTION
     # ============================================================
     # On ajoute None pour le cas "Sans barres / False"
-    scenarios = [0.0, 1.0, 5.0, 10.0, 15.0, None] 
+    scenarios = [0.0, 100.0, 500.0, 1000.0, 1500.0, None] 
     results = {}
 
     for t_ins in scenarios:
@@ -109,11 +107,11 @@ def generate_comparative_plot():
     # Couleurs et styles pour chaque courbe
     styles = {
         0.0: {'color': 'blue', 'label': 'Activation immédiate (0s)', 'ls': '-'},
-        1.0: {'color': 'cyan', 'label': 'Retard de 1s', 'ls': '-'},
-        5.0: {'color': 'green', 'label': 'Retard de 5s', 'ls': '-'},
-        10.0: {'color': 'orange', 'label': 'Retard de 10s', 'ls': '-'},
-        15.0: {'color': 'purple', 'label': 'Retard de 15s', 'ls': '-'},
-        None: {'color': 'red', 'label': 'Sans refroidissement (Défaillance)', 'ls': '--'}
+        100.0: {'color': 'cyan', 'label': 'Retard de 100s', 'ls': '-'},
+        500.0: {'color': 'green', 'label': 'Retard de 500s', 'ls': '-'},
+        1000.0: {'color': 'orange', 'label': 'Retard de 1000s', 'ls': '-'},
+        1500.0: {'color': 'purple', 'label': 'Retard de 1500s', 'ls': '-'},
+        None: {'color': 'grey', 'label': 'Sans refroidissement (Défaillance)', 'ls': '--'}
     }
 
     for t_ins in scenarios:
@@ -122,12 +120,14 @@ def generate_comparative_plot():
                  label=styles[t_ins]['label'], linestyle=styles[t_ins]['ls'], linewidth=2.5)
 
     # Ligne d'ébullition
-    plt.axhline(y=344.85, color='black', linestyle=':', linewidth=2, label="Température de saturation (~345 °C)")
+    plt.axhline(y=344.85, color='red', linestyle='-', linewidth=2, label="Limite d'ébullition ~345°C", zorder=10)
+
+    plt.fill_between([0, 3600], 344.85, 400, color='red', alpha=0.1)
 
     plt.xlabel("Temps écoulé depuis l'arrêt [s]", fontsize=13)
     plt.ylabel("Température maximale $T_{max}$ [°C]", fontsize=13)
-    plt.title("Impact du délai d'activation du refroidissement passif", fontsize=15)
-    plt.legend(loc='lower right', fontsize=11, framealpha=0.9)
+    plt.title("Évolution Thermique en Fonction du Délai d'Activation du Système de Refroidissement", fontsize=14, fontweight='bold')
+    plt.legend(loc='upper left', fontsize=11, framealpha=0.9)
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     

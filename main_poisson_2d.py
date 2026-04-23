@@ -21,7 +21,7 @@ def main(order=1):
     n_val               = 1         # assemblages (1, 4 ou 9)
     pitch_val           = 18.7e-3   # pas du réseau [m]
     R_rod_val           = 6.15e-3   # rayon crayon [m]
-    R_cooling_val       = 2.0e-3    # rayon barre refroidissement [m]
+    R_cooling_val       = 2e-3    # rayon barre refroidissement [m]
     gap_assembly_val    = 12e-3     # espace inter-assemblages [m]
     cooling = False     # activer/désactiver les barres
 
@@ -31,7 +31,7 @@ def main(order=1):
     SAVE_PDF            = False      # sauvegarder le maillage en PDF
 
     # --- Physique ---
-    t_insert_val = 0.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
+    t_insert_val = 500.0  # Temps d'activation des barres [s] (0.0 pour activation immédiate)
     T0_K    = 553.15    # température initiale [K] (~280°C, REP nominal)
     P_MPa   = 15.5      # pression [MPa] = 155 bars
     theta   = 1.0       # schéma θ : 1.0 = Euler implicite (inconditionnellement stable)
@@ -160,36 +160,37 @@ def main(order=1):
     # ============================================================
     plt.figure(figsize=(11, 7))
 
-    # --- Conversion en Celsius ---
+    # --- NOUVEAU : Conversion en Celsius et temps en Minutes ---
+    time_min = np.array(time_list) / 60.0  # Conversion secondes -> minutes
     T_max_C = np.array(T_max_list) - 273.15
     T_avg_C = np.array(T_avg_list) - 273.15
-    T_min_C = np.array(T_min_list) - 273.15 # <--- NOUVEAU
+    T_min_C = np.array(T_min_list) - 273.15
 
-    # Tracé des courbes de simulation
-    plt.plot(time_list, T_max_C, label="Température Maximale ($T_{max}$)", color='darkorange', lw=2.5)
-    plt.plot(time_list, T_avg_C, label="Température Moyenne ($T_{moy}$)", color='royalblue', lw=2, linestyle='--')
-    plt.plot(time_list, T_min_C, label="Température Minimale ($T_{min}$)", color='seagreen', lw=1.5, alpha=0.8)
+    # Tracé des courbes de simulation (Axe X en minutes)
+    plt.plot(time_min, T_max_C, label="Température Maximale ($T_{max}$)", color='darkorange', lw=2.5)
+    plt.plot(time_min, T_avg_C, label="Température Moyenne ($T_{moy}$)", color='royalblue', lw=2, linestyle='--')
+    plt.plot(time_min, T_min_C, label="Température Minimale ($T_{min}$)", color='seagreen', lw=1.5, alpha=0.8)
     
-    # Ligne d'ébullition "EFFRAYANTE"
-    # color='red', linewidth=4 et zorder élevé pour qu'elle passe au-dessus de tout
-    plt.axhline(y=344.85, color='red', linestyle='-', linewidth=2, label="Limite d'ébullition ~345°C", zorder=10)
+    # Ligne d'ébullition "EFFRAYANTE" (Rouge très épais)
+    plt.axhline(y=344.85, color='red', linestyle='-', linewidth=2, label="Limite d'ébullition ~345°", zorder=10)
 
-    # Ombrage de la zone de danger (optionnel pour l'esthétique)
-    plt.fill_between(time_list, 344.85, 400, color='red', alpha=0.1)
+    # Ombrage de la zone de danger (Basé sur les minutes)
+    plt.fill_between(time_min, 344.85, 400, color='red', alpha=0.1)
 
+    # Ligne d'activation convertie en minutes
     if cooling and t_insert_val > 0:
-        plt.axvline(x=t_insert_val, color='black', linestyle='-.', alpha=0.6, label=f"Activation Barres (t={t_insert_val}s)")
+        plt.axvline(x=t_insert_val / 60.0, color='black', linestyle='-.', alpha=0.6, label=f"Activation Barres (t={t_insert_val/60:.1f} min)")
 
-    plt.xlabel("Temps écoulé depuis l'arrêt [s]", fontsize=12)
+    plt.xlabel("Temps écoulé depuis l'arrêt [min]", fontsize=12) # Label mis à jour
     plt.ylabel("Température mesurée [°C]", fontsize=12)
     plt.title("Évolution Thermique en Défaillance de Refroidissement", fontsize=14, fontweight='bold')
     
-    plt.ylim(T_min_C.min() - 5, 360) # On cadre pour bien voir la limite
+    plt.ylim(T_min_C.min() - 5, 360) 
     plt.legend(loc='lower right', framealpha=0.9)
     plt.grid(True, which='both', linestyle=':', alpha=0.5)
     
     plt.tight_layout()
-    plt.savefig("evolution_temperatures_t_insert_False.pdf", dpi=300)
+    plt.savefig("accident_thermique_scary.pdf", dpi=300)
     plt.show(block=False)
     # ============================================================
     # ETAPE 7 : ANIMATION

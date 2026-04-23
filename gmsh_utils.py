@@ -33,7 +33,7 @@ def border_dofs_from_tags(l_tags, tag_to_dof):
     return tag_to_dof[l_tags[valid_mask]]
 
 
-def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap_assembly=12e-3, R_core=None, smin=1.5e-3, add_cooling_rods=True):
+def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap_assembly=12e-3, R_core=None, smin=1.5e-3, add_cooling_rods=True, cooling_layout='full'):
 
     import sys, math
     assert n in (1, 4, 9), "n doit être 1, 4 ou 9"
@@ -112,46 +112,53 @@ def mesh5(m=3, n=4, order=1, pitch=18.7e-3, R_rod=6.15e-3, R_cooling=2.0e-3, gap
 
     # Barres de refroidissement — trous dans la surface eau (Neumann : flux Churchill-Chu)
     cool_circles, cool_loops, cooling_positions = [], [], []
-    if add_cooling_rods:
+    if add_cooling_rods and cooling_layout != 'none':
         outer_offset = m / 2.0 * pitch  # distance bord assemblage → centre barre extérieure
 
         for (cx, cy) in centers:
-            # Barres intérieures : au centre de chaque carré formé par 4 crayons voisins
-            for i in range(m - 1):
-                for j in range(m - 1):
-                    bx = cx + (i - (m - 2) / 2.0) * pitch
-                    by = cy + (j - (m - 2) / 2.0) * pitch
+            # 1. Barres intérieures
+            if cooling_layout in ['full', 'checkerboard', 'central']:
+                for i in range(m - 1):
+                    for j in range(m - 1):
+                        # Logique de filtrage selon le layout
+                        if cooling_layout == 'checkerboard' and (i + j) % 2 != 0:
+                            continue  # On saute 1 barre sur 2
+                        
+                        if cooling_layout == 'central':
+                            # Pour m=8, les indices vont de 0 à 6. Le centre strict c'est 2, 3, 4.
+                            if not (2 <= i <= 4 and 2 <= j <= 4):
+                                continue # On ne garde que le carré central 3x3
+
+                        bx = cx + (i - (m - 2) / 2.0) * pitch
+                        by = cy + (j - (m - 2) / 2.0) * pitch
+                        c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
+                        lp = gmsh.model.occ.addCurveLoop([c])
+                        cool_circles.append(c)
+                        cool_loops.append(lp)
+                        cooling_positions.append((bx, by))
+
+            # 2. Barres extérieures (Bords et Coins)
+            if cooling_layout in ['full', 'checkerboard', 'peripheral']:
+                # Bords
+                for k in range(m - 1):
+                    mid = (k - (m - 2) / 2.0) * pitch
+                    for bx, by in [(cx - outer_offset, cy + mid), (cx + outer_offset, cy + mid), (cx + mid, cy - outer_offset), (cx + mid, cy + outer_offset)]:
+                        c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
+                        lp = gmsh.model.occ.addCurveLoop([c])
+                        cool_circles.append(c)
+                        cool_loops.append(lp)
+                        cooling_positions.append((bx, by))
+
+                # Coins extrêmes
+                for bx, by in [
+                    (cx - outer_offset, cy - outer_offset), (cx + outer_offset, cy - outer_offset),
+                    (cx - outer_offset, cy + outer_offset), (cx + outer_offset, cy + outer_offset)
+                ]:
                     c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
                     lp = gmsh.model.occ.addCurveLoop([c])
                     cool_circles.append(c)
                     cool_loops.append(lp)
                     cooling_positions.append((bx, by))
-
-            # Barres extérieures : milieu de chaque paire de crayons sur les 4 bords
-            # Chaque assemblage a ses propres barres → 2 rangées entre assemblages voisins
-            for k in range(m - 1):
-                mid = (k - (m - 2) / 2.0) * pitch
-                for bx, by in [(cx - outer_offset, cy + mid), (cx + outer_offset, cy + mid), (cx + mid, cy - outer_offset), (cx + mid, cy + outer_offset)]:
-                    c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
-                    lp = gmsh.model.occ.addCurveLoop([c])
-                    cool_circles.append(c)
-                    cool_loops.append(lp)
-                    cooling_positions.append((bx, by))
-
-            # ==========================================
-            # NOUVEAU : Barres dans les 4 coins extrêmes
-            # ==========================================
-            for bx, by in [
-                (cx - outer_offset, cy - outer_offset), # Coin bas gauche
-                (cx + outer_offset, cy - outer_offset), # Coin bas droite
-                (cx - outer_offset, cy + outer_offset), # Coin haut gauche
-                (cx + outer_offset, cy + outer_offset)  # Coin haut droite
-            ]:
-                c  = gmsh.model.occ.addCircle(bx, by, 0, R_cooling)
-                lp = gmsh.model.occ.addCurveLoop([c])
-                cool_circles.append(c)
-                cool_loops.append(lp)
-                cooling_positions.append((bx, by))
             # ==========================================
 
     # Surface eau = rectangle - trous crayons - trous barres
