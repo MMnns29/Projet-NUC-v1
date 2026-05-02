@@ -25,6 +25,13 @@ def main(order=1):
     gap_assembly_val    = 12e-3     # espace inter-assemblages [m]
     cooling = False     # activer/désactiver les barres
 
+    # Disposition des barres de refroidissement (ignoré si cooling=False) :
+    #   'full'          — barres intérieures + bords
+    #   'checkerboard'  — 1 barre intérieure sur 2 (damier) + bords
+    #   'central'       — carré central 3×3 de barres intérieures uniquement
+    #   'peripheral'    — bords uniquement (pas de barres intérieures)
+    cooling_layout_val  = 'full'
+
     # --- Maillage ---
     mesh_refinement     = 1       # >1 = plus fin, <1 = plus grossier
     smin_val            = 0.5e-3 / mesh_refinement  # taille min des éléments [m]
@@ -52,8 +59,7 @@ def main(order=1):
     gmsh_init("poisson_2d")
 
     # Génération du maillage rectangulaire périodique avec crayons et barres
-    elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions = mesh5(m=m_val, n=n_val, order=order, pitch=pitch_val, R_rod=R_rod_val, R_cooling=R_cooling_val, gap_assembly=gap_assembly_val, smin=smin_val, add_cooling_rods=cooling)
-
+    elemType, nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, cooling_positions = mesh5(m=m_val, n=n_val, order=order,pitch=pitch_val, R_rod=R_rod_val, R_cooling=R_cooling_val,gap_assembly=gap_assembly_val, smin=smin_val,add_cooling_rods=cooling,cooling_layout=cooling_layout_val)
     path = os.path.join(os.path.dirname(__file__), "mesh_plot.pdf")
     plot_mesh_2d(nodeTags, nodeCoords, elemTags, elemNodeTags, bnds, bnds_tags, save_path=path if SAVE_PDF else None, cooling_rods=cooling_positions, R_cooling=R_cooling_val)
     plt.show()
